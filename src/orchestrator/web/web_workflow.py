@@ -204,9 +204,30 @@ class WebWorkflowOrchestrator:
                     await ws.emit(sid, "stage_update", {
                         "stage": "TESTING",
                         "status": "error",
-                        "message": "Tests failed ✗. Analyzing and attempting to fix...",
+                        "message": "Tests failed ✗. Analysis complete. Waiting for user review...",
                     })
-                    # Auto-retry on test failure
+                    
+                    action = await self._checkpoint(
+                        session,
+                        checkpoint_type="test_review",
+                        message="Test failures detected. Review the tracebacks and root cause analysis below.",
+                        data={
+                            "output": context.test_results.get("output", ""),
+                            "rca_data": context.test_results.get("rca_data", {})
+                        }
+                    )
+                    
+                    if action == "reject":
+                        session.status = "complete"
+                        context.success = False
+                        context.error_message = "User aborted pipeline during test review."
+                        await ws.emit(sid, "pipeline_complete", {
+                            "status": "error",
+                            "message": context.error_message,
+                        })
+                        return context
+                    
+                    # Auto-retry / fix mode on test failure
                     context.retry_count += 1
                     if context.retry_count <= context.max_retries:
                         await ws.emit(sid, "log", {"message": f"Test failures detected. Looping back to Coder Agent to fix (Retry {context.retry_count}/{context.max_retries})…"})

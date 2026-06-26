@@ -106,6 +106,43 @@ export default function ReviewPanel() {
                   : 'The pipeline encountered a critical error or reached maximum retries.'}
             </p>
 
+            {/* Test Failure Output rendering */}
+            {status === 'checkpoint' && checkpoint?.checkpoint_type === 'test_review' && (
+              <div style={{ marginBottom: 16 }}>
+                {checkpoint.data?.rca_data?.rca && checkpoint.data.rca_data.rca.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Activity size={14} style={{ color: 'var(--error)' }} /> Root Cause Analysis
+                    </div>
+                    {checkpoint.data.rca_data.rca.map((r: any, idx: number) => (
+                       <div key={idx} style={{ padding: 10, background: 'var(--bg-input)', borderRadius: 6, marginBottom: 8, border: '1px solid var(--border)' }}>
+                         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--error)' }}>{r.category}</div>
+                         <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>Impacted: {r.impacted_tests}</div>
+                         <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 4 }}>{r.diagnosis}</div>
+                       </div>
+                    ))}
+                  </>
+                )}
+                {checkpoint.data?.rca_data?.recommended_action && (
+                  <div style={{ fontSize: 12, padding: 10, background: 'var(--primary-dim)', color: 'var(--primary)', borderRadius: 6, marginBottom: 12, border: '1px solid rgba(99,102,241,0.2)' }}>
+                    <span style={{ fontWeight: 600 }}>Suggested Fix: </span>{checkpoint.data.rca_data.recommended_action}
+                  </div>
+                )}
+
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)', marginBottom: 8, marginTop: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <FileText size={14} style={{ color: 'var(--text-3)' }} /> Raw Terminal Output
+                </div>
+                <div style={{ 
+                  background: '#0d1117', color: '#c9d1d9', padding: 12, borderRadius: 6, 
+                  fontFamily: 'monospace', fontSize: 11, maxHeight: 350, overflowY: 'auto',
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word', border: '1px solid var(--border)',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)'
+                }}>
+                  {checkpoint.data?.output || 'No output available'}
+                </div>
+              </div>
+            )}
+
             {/* Feedback textarea */}
             <AnimatePresence>
               {editMode && (
