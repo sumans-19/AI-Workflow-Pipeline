@@ -1,0 +1,215 @@
+@import "tailwindcss";
+
+/* ────────────────────────────────────────────────────
+   Design tokens — premium dark IDE theme
+──────────────────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --bg-base:      #0B0F17;
+  --bg-panel:     #111827;
+  --bg-card:      #1A2233;
+  --bg-input:     #151E2D;
+  --bg-hover:     rgba(255,255,255,0.04);
+  --bg-active:    rgba(99,102,241,0.12);
+
+  /* Borders */
+  --border:       #2A3446;
+  --border-light: rgba(255,255,255,0.06);
+  --border-focus: #6366F1;
+
+  /* Brand */
+  --primary:      #6366F1;
+  --primary-dim:  rgba(99,102,241,0.15);
+  --primary-glow: rgba(99,102,241,0.25);
+  --accent:       #8B5CF6;
+
+  /* Semantic */
+  --success:      #22C55E;
+  --success-dim:  rgba(34,197,94,0.12);
+  --warning:      #F59E0B;
+  --warning-dim:  rgba(245,158,11,0.12);
+  --error:        #EF4444;
+  --error-dim:    rgba(239,68,68,0.12);
+
+  /* Text */
+  --text-1:    #F1F5F9;  /* Primary */
+  --text-2:    #94A3B8;  /* Secondary */
+  --text-3:    #475569;  /* Muted */
+  --text-4:    #1E293B;  /* Very muted */
+
+  /* Spacing system (8px base) */
+  --s1: 8px;
+  --s2: 12px;
+  --s3: 16px;
+  --s4: 20px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  /* Layout */
+  --topnav-h:     56px;
+  --statusbar-h:  28px;
+  --activity-w:   48px;
+  --explorer-w:   280px;
+  --review-w:     340px;
+  --promptbar-h:  72px;
+  --radius-sm:    6px;
+  --radius:       10px;
+  --radius-lg:    14px;
+  --radius-xl:    18px;
+}
+
+/* ── Reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-1);
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* ── Glass surface ── */
+.glass {
+  background: rgba(17, 24, 39, 0.85);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border-light);
+}
+
+/* ── Card ── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* ── Focus ring ── */
+.focus-ring:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ── Gradient text ── */
+.gradient-text {
+  background: linear-gradient(135deg, #818CF8, #6366F1, #A78BFA);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Code font ── */
+.mono {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  font-feature-settings: "liga" 0;
+}
+
+/* ── Animations ── */
+@keyframes spin         { to { transform: rotate(360deg); } }
+@keyframes pulse-ring   { 0%,100%{opacity:1} 50%{opacity:.4} }
+@keyframes shimmer      { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+@keyframes slide-up     { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+@keyframes slide-down   { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+@keyframes fade-in      { from{opacity:0} to{opacity:1} }
+@keyframes bounce-dot   {
+  0%,80%,100%{transform:translateY(0)}
+  40%{transform:translateY(-4px)}
+}
+
+.spin          { animation: spin 0.75s linear infinite; }
+.pulse-ring    { animation: pulse-ring 1.5s ease-in-out infinite; }
+.slide-up      { animation: slide-up 0.2s ease-out both; }
+.slide-down    { animation: slide-down 0.2s ease-out both; }
+.fade-in       { animation: fade-in 0.2s ease-out both; }
+
+.typing-dot    { animation: bounce-dot 1.3s infinite; }
+.typing-dot:nth-child(2) { animation-delay:.15s; }
+.typing-dot:nth-child(3) { animation-delay:.3s; }
+
+/* Skeleton shimmer */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-panel) 50%, var(--bg-card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Resizable handle ── */
+.resize-handle {
+  width: 1px;
+  background: var(--border);
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background 150ms;
+  position: relative;
+}
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: var(--primary);
+  width: 2px;
+}
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: 0 -3px;
+}
+
+/* ── Status indicator dots ── */
+.dot-success { background: var(--success); }
+.dot-warning { background: var(--warning); }
+.dot-error   { background: var(--error); }
+.dot-primary { background: var(--primary); }
+.dot-muted   { background: var(--text-3); }
+
+/* ── Pipeline step connector ── */
+.step-connector {
+  position: absolute;
+  left: 15px;
+  top: 32px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--border);
+}
+.step-connector.done  { background: var(--success); }
+.step-connector.error { background: var(--error); }
+
+/* ── Diff colors ── */
+.diff-add { background: rgba(34,197,94,.08); border-left: 2px solid var(--success); }
+.diff-del { background: rgba(239,68,68,.08); border-left: 2px solid var(--error); }
+
+/* ── Tooltip ── */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: #0B0F17;
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  font-size: 12px;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 150ms;
+  z-index: 100;
+}
+[data-tooltip]:hover::after { opacity: 1; }

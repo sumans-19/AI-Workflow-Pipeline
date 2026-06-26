@@ -1,0 +1,21 @@
+1. Run All Tests with Coverage (Full Project)
+This gives you a complete overview of the entire project's health.
+
+bash
+pytest --cov=src
+2. Run LLM Tests with 100% Coverage Report
+This specifically runs the 24 tests we just perfected for the LLM layer.
+
+bash
+pytest --cov=src/orchestrator/llm tests/llm/test_llm_layer.py
+3. Generate a Visual (HTML) Coverage Report
+This creates a folder called htmlcov. You can open index.html inside it to click on lines of code and see exactly which ones are tested.
+
+bash
+pytest --cov=src --cov-report=html
+4. Run Tests without Coverage (Fastest)
+If you just want to check if your code is broken without doing the math for coverage:
+
+bash
+pytest -v
+Note: Always run these commands from the root directory of your project

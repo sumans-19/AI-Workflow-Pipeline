@@ -1,0 +1,53 @@
+> """Abstract base class for LLM clients."""
+  
+> from abc import ABC, abstractmethod
+> from typing import TYPE_CHECKING, Optional
+  
+- if TYPE_CHECKING:
+-     from .cost_tracker import CostTracker
+  
+  
+> class BaseLLMClient(ABC):
+>     """Interface that all LLM client implementations must follow."""
+  
+>     def __init__(self):
+>         self._cost_tracker: Optional["CostTracker"] = None
+>         self._provider_name: str = ""
+  
+>     def set_cost_tracker(self, tracker: Optional["CostTracker"]) -> None:
+>         self._cost_tracker = tracker
+  
+>     def _report_usage(
+>         self, model: str, prompt_tokens: int, completion_tokens: int
+>     ) -> None:
+>         if self._cost_tracker is not None:
+>             self._cost_tracker.record(
+>                 model=model,
+>                 provider=self._provider_name,
+>                 prompt_tokens=prompt_tokens,
+>                 completion_tokens=completion_tokens,
+>             )
+  
+>     @abstractmethod
+>     def generate(
+>         self,
+>         system_prompt: str,
+>         user_prompt: str,
+>         max_retries: int = 3,
+>         response_schema: Optional[dict] = None,
+>     ) -> str:
+>         """Send a prompt to the LLM and return the text response.
+  
+>         Args:
+>             system_prompt: The system-level instruction.
+>             user_prompt: The user-level message.
+>             max_retries: Maximum number of retry attempts on transient errors.
+>             response_schema: Optional JSON schema for structured output.
+  
+>         Returns:
+>             The LLM's text response.
+  
+>         Raises:
+>             LLMError: On API failures or exhausted retries.
+>         """
+-         ...

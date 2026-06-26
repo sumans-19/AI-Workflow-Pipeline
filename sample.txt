@@ -1,0 +1,4 @@
+ python -m src.orchestrator.main project "Build a TODO application with add, delete, mark complete, and list tasks. Store tasks in memory with a list. Include a simple CLI menu interface." --name todo_app --type cli --output-dir output
+
+
+ python -m src.orchestrator.main project "Build a TODO application " --name todo_app --type cli --output-dir output

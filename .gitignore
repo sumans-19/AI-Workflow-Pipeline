@@ -1,0 +1,56 @@
+.env
+.env.*
+!.env.example
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+output/
+
+# Type checker and lint caches
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.pyre/
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+.claude/
+CLAUDE.md
+sprint/
+features.md
+test_repo/
+
+# Graphify output and temp files
+graphify-out/
+.graphify_*
