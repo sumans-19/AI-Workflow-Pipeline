@@ -15,6 +15,7 @@ interface SessionState {
   /* Session */
   sessionId: string | null;
   status: SessionStatus;
+  testExecutionMode: 'docker' | 'local';
 
   /* Chat */
   messages: ChatMessage[];
@@ -38,9 +39,16 @@ interface SessionState {
   /* Recently added files (for highlight animation) */
   recentlyAdded: Set<string>;
 
+  /* UI panel state */
+  reviewOpen: boolean;
+  explorerOpen: boolean;
+
   /* Actions */
   setSessionId: (id: string) => void;
   setStatus: (s: SessionStatus) => void;
+  setTestExecutionMode: (mode: 'docker' | 'local') => void;
+  toggleReview: () => void;
+  toggleExplorer: () => void;
 
   addMessage: (msg: ChatMessage) => void;
 
@@ -103,6 +111,7 @@ function buildTree(files: Record<string, string>, languages: Record<string, stri
 const initialState = {
   sessionId: null as string | null,
   status: "pending" as SessionStatus,
+  testExecutionMode: "docker" as "docker" | "local",
   messages: [] as ChatMessage[],
   files: [] as FileNode[],
   selectedFile: null as string | null,
@@ -113,6 +122,8 @@ const initialState = {
   metrics: null as MetricsData | null,
   reviewIssues: [] as string[],
   recentlyAdded: new Set<string>() as Set<string>,
+  reviewOpen: true as boolean,
+  explorerOpen: true as boolean,
 };
 
 // Separate record to track languages (not persisted in state directly)
@@ -123,6 +134,9 @@ export const useSessionStore = create<SessionState>((set, _get) => ({
 
   setSessionId: (id) => set({ sessionId: id }),
   setStatus: (s) => set({ status: s }),
+  setTestExecutionMode: (mode) => set({ testExecutionMode: mode }),
+  toggleReview: () => set((st) => ({ reviewOpen: !st.reviewOpen })),
+  toggleExplorer: () => set((st) => ({ explorerOpen: !st.explorerOpen })),
 
   addMessage: (msg) => set((st) => ({ messages: [...st.messages, msg] })),
 

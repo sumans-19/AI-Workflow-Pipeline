@@ -197,7 +197,7 @@ export function useWebSocket() {
   useEffect(() => {
     if (!sessionId) return;
     
-    let reconnectTimeoutId: NodeJS.Timeout;
+    let reconnectTimeoutId: ReturnType<typeof setTimeout>;
     let isMounted = true;
 
     const connect = () => {

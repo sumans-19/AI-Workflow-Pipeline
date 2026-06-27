@@ -20,13 +20,13 @@ def run_coder_test():
     
     # 4. Verify Results
     if updated_context.success:
-        print("\n✅ Agent Execution Successful")
+        print("\n Agent Execution Successful")
         print("\n--- Generated Code ---")
         for filename, code in updated_context.source_code.items():
             print(f"File: {filename}")
             print(code)
     else:
-        print(f"\n❌ Agent Execution Failed: {updated_context.error_message}")
+        print(f"\n Agent Execution Failed: {updated_context.error_message}")
 
 if __name__ == "__main__":
     run_coder_test()

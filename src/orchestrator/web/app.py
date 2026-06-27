@@ -57,6 +57,7 @@ class CreateSessionRequest(BaseModel):
     project_name: str = ""
     project_type: str = "library"
     is_project_mode: bool = False
+    test_execution_mode: str = "docker"
 
 
 class CheckpointActionRequest(BaseModel):
@@ -74,6 +75,31 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/")
+async def root():
+    """Root endpoint — silences browser 404s when users hit the API host directly."""
+    return {
+        "name": "AI Development Orchestrator — Web API",
+        "version": "0.2.0",
+        "frontend": "http://localhost:5173",
+        "endpoints": {
+            "health": "/api/health",
+            "docs": "/docs",
+            "sessions": "/api/sessions",
+            "websocket": "/ws/{session_id}",
+            "docker_status": "/api/docker/status",
+        },
+        "status": "running",
+    }
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Silence browser favicon 404 noise."""
+    from fastapi.responses import Response
+    return Response(status_code=204)
+
+
 @app.post("/api/sessions")
 async def create_session(req: CreateSessionRequest):
     """Create a new pipeline session and start the orchestrator in the background."""
@@ -83,6 +109,7 @@ async def create_session(req: CreateSessionRequest):
         project_name=req.project_name,
         project_type=req.project_type,
         is_project_mode=req.is_project_mode,
+        test_execution_mode=req.test_execution_mode,
     )
 
     # Launch pipeline as a background task
@@ -146,6 +173,34 @@ async def get_session_file(session_id: str, path: str):
 
     return {"path": path, "content": content}
 
+class SaveFileRequest(BaseModel):
+    path: str
+    content: str
+
+@app.post("/api/sessions/{session_id}/files/save")
+async def save_session_file(session_id: str, req: SaveFileRequest):
+    session = await store.get(session_id)
+    if not session or not session.context:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    session.context.source_code[req.path] = req.content
+    
+    from pathlib import Path
+    abs_path = Path(session.context.workspace_path) / req.path
+    # Write the file, ensuring parent dirs exist
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path.write_text(req.content, encoding="utf-8")
+    
+    # Broadcast to websocket
+    await ws_manager.emit(session_id, "file_updated", {
+        "path": req.path,
+        "content": req.content,
+        "language": "python"
+    })
+    
+    return {"status": "ok"}
+
 
 @app.post("/api/sessions/{session_id}/action")
 async def checkpoint_action(session_id: str, req: CheckpointActionRequest):
@@ -183,6 +238,18 @@ async def checkpoint_action(session_id: str, req: CheckpointActionRequest):
     logger.info("Checkpoint event SET for session=%s action=%s", session_id, req.action)
 
     return {"status": "ok", "action": req.action}
+
+
+@app.get("/api/docker/status")
+async def get_docker_status():
+    try:
+        import docker
+        client = docker.from_env()
+        client.ping()
+        return {"status": "available"}
+    except Exception as e:
+        logger.warning(f"Docker status check failed: {e}")
+        return {"status": "unavailable", "reason": str(e)}
 
 
 # ──────────────────────────────────────────────────────────────────────

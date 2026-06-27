@@ -32,32 +32,55 @@ class OpenAIClient(BaseLLMClient):
 
     @staticmethod
     def _try_repair_json(text: str) -> str:
-        """Attempt to repair truncated JSON responses."""
+        """Attempt to repair truncated JSON responses using a state machine."""
         text = text.rstrip()
-
-        if text.count('"') % 2 != 0:
-            last_quote = text.rfind('"')
-            text = text[:last_quote] + '"'
-
-        text = re.sub(r',\s*$', '', text)
-
-        open_braces = text.count('{') - text.count('}')
-        open_brackets = text.count('[') - text.count(']')
-
-        if open_braces > 0 or open_brackets > 0:
-            last_complete_brace = text.rfind('}')
-            last_open_brace = text.rfind('{')
-            if last_open_brace > last_complete_brace:
-                text = text[:last_open_brace].rstrip().rstrip(',')
-
-            open_braces = text.count('{') - text.count('}')
-            open_brackets = text.count('[') - text.count(']')
-
-            text = re.sub(r',\s*$', '', text)
-
-            text += ']' * max(0, open_brackets)
-            text += '}' * max(0, open_braces)
-
+        
+        # 1. Properly close any open string
+        in_string = False
+        escape_next = False
+        for char in text:
+            if escape_next:
+                escape_next = False
+            elif char == '\\':
+                escape_next = True
+            elif char == '"':
+                in_string = not in_string
+                
+        if in_string:
+            if text.endswith('\\'):
+                text = text[:-1]
+            text += '"'
+            
+        # 2. Track open braces/brackets outside of strings to close them
+        stack = []
+        in_string = False
+        escape_next = False
+        
+        for char in text:
+            if escape_next:
+                escape_next = False
+            elif char == '\\':
+                escape_next = True
+            elif char == '"':
+                in_string = not in_string
+            elif not in_string:
+                if char == '{':
+                    stack.append('}')
+                elif char == '[':
+                    stack.append(']')
+                elif char == '}' and stack and stack[-1] == '}':
+                    stack.pop()
+                elif char == ']' and stack and stack[-1] == ']':
+                    stack.pop()
+                    
+        # Remove any trailing commas or colons if we aren't in a string
+        if not in_string:
+            text = re.sub(r'[,:\s]+$', '', text)
+            
+        # Close all open structures
+        while stack:
+            text += stack.pop()
+            
         return text
 
     def generate(

@@ -66,7 +66,7 @@ export default function ActionTimeline() {
             {PATHS.map((d, i) => {
               const stageStatus = getStep(STAGES[i].stage)?.status ?? 'pending'
               const isPulse = stageStatus === 'in_progress'
-              const isSolid = stageStatus === 'complete'
+              const isSolid = stageStatus === 'complete' || stageStatus === 'bypassed'
 
               return (
                 <g key={i}>
@@ -126,7 +126,7 @@ export default function ActionTimeline() {
 
             const isWaiting = s === 'pending';
             const isRunning = s === 'in_progress';
-            const isComplete = s === 'complete';
+            const isComplete = s === 'complete' || s === 'bypassed';
             const isError = s === 'error';
 
             let CurrentIcon = Icon;
@@ -212,7 +212,7 @@ export default function ActionTimeline() {
                         exit={{ opacity: 0, y: -2 }}
                         transition={{ duration: 0.2 }}
                       >
-                        {isRunning ? 'Running...' : isComplete ? 'Completed' : isError ? 'Failed' : 'Waiting'}
+                        {isRunning ? 'Running...' : s === 'complete' ? 'Completed' : s === 'bypassed' ? 'Bypassed' : isError ? 'Failed' : 'Waiting'}
                       </motion.span>
                     </AnimatePresence>
                   </div>

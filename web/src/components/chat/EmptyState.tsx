@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 interface Props { onPrompt: (p: string) => void }
 
 
-export default function EmptyState({ onPrompt }: Props) {
+export default function EmptyState(_props: Props) {
   return (
     <div className="flex flex-col items-center justify-center h-full px-8" style={{ maxWidth: 800, margin: '0 auto', width: '100%' }}>
       {/* Hero */}

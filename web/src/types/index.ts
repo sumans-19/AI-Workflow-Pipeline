@@ -8,7 +8,7 @@ export type PipelineStage =
   | "VALIDATING"
   | "COMPLETE";
 
-export type StageStatus = "pending" | "in_progress" | "complete" | "error";
+export type StageStatus = "pending" | "in_progress" | "complete" | "error" | "bypassed";
 
 export type CheckpointType = "CODE_REVIEW" | "TEST_REVIEW" | "FINAL_REVIEW";
 
@@ -40,10 +40,17 @@ export interface FileCreatedData {
 
 export interface TestResultsData {
   passed: boolean;
+  /** True when the majority (>=70%) of tests passed even if some failed. */
+  majority_passed?: boolean;
+  /** Pass rate as a fraction in [0, 1]. */
+  pass_rate?: number;
   output: string;
   coverage_line: number;
   coverage_branch: number;
   duration: number;
+  execution_mode?: string;
+  report_data?: Record<string, any>;
+  rca_data?: Record<string, any>;
 }
 
 export interface ReviewReportData {

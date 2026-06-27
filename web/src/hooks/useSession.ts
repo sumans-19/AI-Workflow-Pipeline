@@ -13,6 +13,7 @@ export function useSession() {
 
   const createSession = useCallback(
     async (prompt: string) => {
+      const store = useSessionStore.getState();
       reset();
 
       addMessage({
@@ -26,7 +27,11 @@ export function useSession() {
         const res = await fetch(`${API_BASE}/api/sessions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt, mode: "GENERATE" }),
+          body: JSON.stringify({ 
+            prompt, 
+            mode: "GENERATE",
+            test_execution_mode: store.testExecutionMode
+          }),
         });
         const data = await res.json();
         setSessionId(data.session_id);

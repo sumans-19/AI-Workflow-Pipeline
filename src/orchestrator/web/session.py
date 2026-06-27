@@ -18,6 +18,7 @@ class Session:
     project_name: str = ""
     project_type: str = "library"
     is_project_mode: bool = False
+    test_execution_mode: str = "docker"
     status: str = "pending"  # pending | running | checkpoint | complete | error
     context: Optional[WorkflowContext] = None
 

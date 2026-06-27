@@ -50,11 +50,11 @@ class WebWorkflowOrchestrator:
         context = WorkflowContext(
             requirements=session.prompt,
             mode=session.mode,
+            project_name=session.project_name or "generated_project",
+            project_type=session.project_type or "library",
+            is_project_mode=session.is_project_mode,
+            test_execution_mode=session.test_execution_mode
         )
-        context.is_project_mode = session.is_project_mode
-        context.project_name = session.project_name
-        context.project_type = session.project_type
-
         session.context = context
         session.status = "running"
 
@@ -191,49 +191,166 @@ class WebWorkflowOrchestrator:
                 await self._sync_test_files(sid, context)
 
                 test_passed = context.test_results.get("passed", False)
-                
+                test_majority = context.test_results.get("majority_passed", False)
+                test_pass_rate = context.test_results.get("pass_rate", 0)
+
                 await ws.emit(sid, "test_results", {
                     "passed": test_passed,
+                    "majority_passed": test_majority,
+                    "pass_rate": test_pass_rate,
                     "output": context.test_results.get("output", "")[:3000],
                     "coverage_line": context.test_results.get("coverage_line", 0),
                     "coverage_branch": context.test_results.get("coverage_branch", 0),
                     "duration": context.test_results.get("duration_seconds", 0),
+                    "execution_mode": context.test_results.get("execution_mode", "unknown"),
+                    "report_data": context.test_results.get("report_data", {}),
+                    "rca_data": context.test_results.get("rca_data", {})
                 })
 
-                if not test_passed:
+                # ── ALWAYS show test_review checkpoint after testing (regardless of pass/fail) ──
+                # The user must explicitly choose what happens next: Approve, Auto-Fix, Bypass, or Reject.
+                # We always show the rich review content (summary, terminal output, RCA) so the user
+                # can make an informed decision.
+                raw_passed = context.test_results.get("raw_passed", test_passed)
+                summary = (context.test_results.get("report_data", {}) or {}).get("summary", {}) or {}
+                failed_count = int(summary.get("failed", 0) or 0)
+
+                if test_passed and failed_count == 0:
+                    stage_status = "complete"
+                    stage_message = "All tests passed ✓. Waiting for user confirmation to proceed to Reviewer."
+                    checkpoint_message = "All tests passed. Choose how to continue:"
+                elif test_passed:
+                    stage_status = "complete"
+                    stage_message = (
+                        f"Tests mostly passed ({test_pass_rate*100:.1f}%, "
+                        f"{failed_count} edge-case failure(s)). Waiting for your review."
+                    )
+                    checkpoint_message = (
+                        f"Most tests passed but {failed_count} edge-case failure(s) remain. "
+                        "Review the tracebacks and choose an action."
+                    )
+                else:
+                    stage_status = "error"
+                    stage_message = "Tests failed ✗. Analysis complete. Waiting for user review..."
+                    checkpoint_message = "Test failures detected. Review the tracebacks and root cause analysis below."
+
+                await ws.emit(sid, "stage_update", {
+                    "stage": "TESTING",
+                    "status": stage_status,
+                    "message": stage_message,
+                })
+
+                # ── Fire the checkpoint so user can choose an action ──
+                action = await self._checkpoint(
+                    session,
+                    checkpoint_type="test_review",
+                    message=checkpoint_message,
+                    data={
+                        "output": context.test_results.get("output", ""),
+                        "rca_data": context.test_results.get("rca_data", {}),
+                        "execution_mode": context.test_results.get("execution_mode", "unknown"),
+                        "report_data": context.test_results.get("report_data", {}),
+                        "passed": test_passed,
+                        "majority_passed": test_majority,
+                        "pass_rate": test_pass_rate,
+                        "raw_passed": raw_passed,
+                        "failed_count": failed_count,
+                    }
+                )
+
+                logger.info("test_review action=%s session=%s", action, sid)
+
+                # ── Reject: end the pipeline ──
+                if action == "reject":
+                    session.status = "complete"
+                    context.success = False
+                    context.error_message = "User rejected at test review."
+                    await ws.emit(sid, "pipeline_complete", {
+                        "status": "error",
+                        "message": context.error_message,
+                    })
+                    return context
+
+                # ── Bypass (Proceed): continue to Reviewer despite failures ──
+                if action == "bypass":
+                    logger.info("User bypassed failed tests for session=%s", sid)
+                    await ws.emit(sid, "log", {"message": "→ Proceeding to Review phase (user bypassed)."})
                     await ws.emit(sid, "stage_update", {
                         "stage": "TESTING",
-                        "status": "error",
-                        "message": "Tests failed ✗. Analysis complete. Waiting for user review...",
+                        "status": "bypassed",
+                        "message": "Testing bypassed by user — continuing to Reviewer."
                     })
-                    
-                    action = await self._checkpoint(
-                        session,
-                        checkpoint_type="test_review",
-                        message="Test failures detected. Review the tracebacks and root cause analysis below.",
-                        data={
-                            "output": context.test_results.get("output", ""),
-                            "rca_data": context.test_results.get("rca_data", {})
-                        }
-                    )
-                    
-                    if action == "reject":
-                        session.status = "complete"
-                        context.success = False
-                        context.error_message = "User aborted pipeline during test review."
-                        await ws.emit(sid, "pipeline_complete", {
-                            "status": "error",
-                            "message": context.error_message,
-                        })
-                        return context
-                    
-                    # Auto-retry / fix mode on test failure
+                    break
+
+                # ── Approve: accept current state and go to Reviewer (NOT back to Coder) ──
+                if action == "approve":
+                    logger.info("User approved tests for session=%s — proceeding to Reviewer", sid)
+                    await ws.emit(sid, "log", {"message": "✓ Tests approved. Proceeding to Reviewer phase."})
+                    await ws.emit(sid, "stage_update", {
+                        "stage": "TESTING",
+                        "status": "complete",
+                        "message": "Tests approved — continuing to Reviewer"
+                    })
+                    break
+
+                # ── Auto-Fix: convert RCA into FeedbackItems and loop back to Coder ──
+                if action == "auto_fix":
+                    rca_list = context.test_results.get("rca_data", {}).get("rca", []) or []
+                    feedback_added = 0
+                    if rca_list:
+                        for rca in rca_list:
+                            try:
+                                context.add_feedback(FeedbackItem(
+                                    run_id=context.run_id,
+                                    checkpoint="TEST_REVIEW",
+                                    source="tester",
+                                    severity="critical",
+                                    category="test",
+                                    description=f"[{rca.get('category')}] {rca.get('why_it_happened')}\nSuggested Fix: {rca.get('suggested_fix')}",
+                                    action="fix",
+                                    status="open",
+                                    author="tester",
+                                    location=rca.get("caused_by_file")
+                                ))
+                                feedback_added += 1
+                            except Exception as fe:
+                                logger.warning("Failed to add RCA feedback item: %s", fe)
+                    if feedback_added == 0:
+                        context.add_feedback(FeedbackItem(
+                            run_id=context.run_id,
+                            checkpoint="TEST_REVIEW",
+                            source="tester",
+                            severity="critical",
+                            category="test",
+                            description="Tests failed. Please review the tracebacks and fix the underlying logic.",
+                            action="fix",
+                            status="open",
+                            author="tester",
+                        ))
+                    await ws.emit(sid, "log", {
+                        "message": f"🔧 Auto-Fix triggered. Looping back to Coder Agent to fix {max(feedback_added, 1)} issue(s)…"
+                    })
                     context.retry_count += 1
                     if context.retry_count <= context.max_retries:
-                        await ws.emit(sid, "log", {"message": f"Test failures detected. Looping back to Coder Agent to fix (Retry {context.retry_count}/{context.max_retries})…"})
                         continue
                     else:
-                        await ws.emit(sid, "log", {"message": "Maximum retries reached. Proceeding with failing tests."})
+                        await ws.emit(sid, "log", {"message": "Maximum retries reached after Auto-Fix. Proceeding to Reviewer with failing tests."})
+                        break
+
+                # ── Retry Failed: re-run the tests without changing code ──
+                if action == "retry":
+                    await ws.emit(sid, "log", {"message": "Retrying failed tests (no code change)…"})
+                    context.retry_count += 1
+                    if context.retry_count <= context.max_retries:
+                        continue
+                    else:
+                            await ws.emit(sid, "log", {"message": "Maximum retries reached after Retry. Proceeding to Reviewer."})
+                            break
+
+                    # Unknown action — fail safe by continuing to Reviewer
+                    logger.warning("Unknown test_review action=%s — continuing to Reviewer", action)
+                    await ws.emit(sid, "log", {"message": f"Unknown action '{action}'. Continuing to Reviewer."})
+                    break
                 
                 # Testing stage is completed via agent_completed event emitted by TesterAgent
 
@@ -281,7 +398,7 @@ class WebWorkflowOrchestrator:
                 "message": "Validation complete",
             })
 
-            # ── E. METRICS & COMPLETION ─────────────────────
+            # ── E. METRICS ─────────────────────────────────
             self._aggregate_metrics(context, start_time)
 
             await ws.emit(sid, "metrics", {
@@ -293,7 +410,51 @@ class WebWorkflowOrchestrator:
                 "llm_cost": str(context.metrics.get("llm_cost", {})),
             })
 
-            # Auto-complete the pipeline
+            # ── F. FINAL REVIEW CHECKPOINT ──────────────────
+            # Give the user a final review checkpoint where they can approve,
+            # regenerate, or inspect the validator output before completion.
+            action = await self._checkpoint(
+                session,
+                checkpoint_type="final_review",
+                message="Final review: inspect the validation results and approve to complete.",
+                data={
+                    "metrics": context.metrics,
+                    "review_issues": context.review_issues,
+                    "validation_report": getattr(context, "validation_report", {}),
+                    "files": list(context.source_code.keys()),
+                },
+            )
+            logger.info("final_review action=%s session=%s", action, sid)
+
+            if action == "reject":
+                # User wants to reject from final review — record feedback and complete
+                # (we're past the retry loop, so we just record the decision).
+                context.add_feedback(FeedbackItem(
+                    run_id=context.run_id,
+                    checkpoint="FINAL_REVIEW",
+                    source="human",
+                    severity="major",
+                    category="review",
+                    description=session.checkpoint_response.get("feedback", "User rejected at final review."),
+                    action="fix",
+                    status="open",
+                    author="human",
+                ))
+                context.success = False
+                context.error_message = "User rejected at final review."
+                await ws.emit(sid, "log", {"message": "✗ User rejected at final review. Pipeline ended."})
+                session.status = "complete"
+                context.stage = "REJECTED"
+                await ws.emit(sid, "pipeline_complete", {
+                    "status": "error",
+                    "message": context.error_message,
+                })
+                return context
+
+            # Approve / bypass / unknown → complete
+            await ws.emit(sid, "log", {"message": "✓ Final review complete. Pipeline finished."})
+
+            # ── G. COMPLETION ──────────────────────────────
             context.stage = "COMPLETE"
             context.success = True
             session.status = "complete"

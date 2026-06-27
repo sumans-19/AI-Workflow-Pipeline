@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
+import { PanelRightOpen, PanelLeftOpen } from 'lucide-react'
 import { useWebSocket } from './hooks/useWebSocket'
+import { useSessionStore } from './store/sessionStore'
 
 import TopNav      from './components/layout/TopNav'
 import FileTree    from './components/explorer/FileTree'
@@ -13,17 +15,18 @@ type CenterTab = 'chat' | 'code' | 'preview'
 const MIN_EXPLORER = 200
 const MAX_EXPLORER = 420
 const MIN_REVIEW   = 260
-const MAX_REVIEW   = 480
+const MAX_REVIEW   = 520
 
 export default function App() {
   useWebSocket()
 
   const [centerTab,      setCenterTab]      = useState<CenterTab>('chat')
-  const [activeSection,  setActiveSection]  = useState('explorer')
   const [explorerWidth,  setExplorerWidth]  = useState(280)
-  const [reviewWidth,    setReviewWidth]    = useState(340)
-  const [explorerOpen,   setExplorerOpen]   = useState(true)
-  const [reviewOpen]    = useState(true)
+  const [reviewWidth,    setReviewWidth]    = useState(380)
+  const explorerOpen   = useSessionStore(s => s.explorerOpen)
+  const reviewOpen     = useSessionStore(s => s.reviewOpen)
+  const toggleReview   = useSessionStore(s => s.toggleReview)
+  const toggleExplorer = useSessionStore(s => s.toggleExplorer)
 
   // Drag state
   const dragging    = useRef<'explorer' | 'review' | null>(null)
@@ -52,15 +55,6 @@ export default function App() {
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }, [explorerWidth, reviewWidth])
-
-  const handleSectionSelect = (section: string) => {
-    if (section === activeSection && explorerOpen) {
-      setExplorerOpen(false)
-    } else {
-      setActiveSection(section)
-      setExplorerOpen(true)
-    }
-  }
 
   return (
     <div
@@ -98,6 +92,8 @@ export default function App() {
             <div
               className="resize-handle"
               onMouseDown={onMouseDown('explorer')}
+              onDoubleClick={toggleExplorer}
+              title="Drag to resize · Double-click to toggle"
               style={{ cursor: 'col-resize' }}
             />
           </>
@@ -130,13 +126,13 @@ export default function App() {
         </main>
 
         {/* Resize handle */}
-        {reviewOpen && (
-          <div
-            className="resize-handle"
-            onMouseDown={onMouseDown('review')}
-            style={{ cursor: 'col-resize' }}
-          />
-        )}
+        <div
+          className="resize-handle"
+          onMouseDown={onMouseDown('review')}
+          onDoubleClick={toggleReview}
+          title="Drag to resize · Double-click to hide"
+          style={{ cursor: 'col-resize' }}
+        />
 
         {/* Review sidebar */}
         {reviewOpen && (
@@ -152,6 +148,52 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Floating toggle buttons — appear when their panel is hidden */}
+      {!explorerOpen && (
+        <button
+          onClick={toggleExplorer}
+          title="Show explorer"
+          aria-label="Show explorer"
+          style={{
+            position: 'fixed', left: 8, top: '50%',
+            transform: 'translateY(-50%)',
+            background: 'var(--bg-panel)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            padding: '6px 8px',
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center',
+            color: 'var(--text-2)',
+            zIndex: 20,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+          }}
+        >
+          <PanelLeftOpen size={14} />
+        </button>
+      )}
+      {!reviewOpen && (
+        <button
+          onClick={toggleReview}
+          title="Show review panel"
+          aria-label="Show review panel"
+          style={{
+            position: 'fixed', right: 8, top: '50%',
+            transform: 'translateY(-50%)',
+            background: 'var(--bg-panel)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            padding: '6px 8px',
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center',
+            color: 'var(--text-2)',
+            zIndex: 20,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+          }}
+        >
+          <PanelRightOpen size={14} />
+        </button>
+      )}
 
     </div>
   )

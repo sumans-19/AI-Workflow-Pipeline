@@ -53,6 +53,7 @@ class WorkflowContext:
     project_type: str = "library"     # "fastapi", "flask", "cli", "library", "script"
     is_project_mode: bool = False
     project_tree: str = ""
+    test_execution_mode: str = "docker"
 
     # Artifacts
     source_code: Dict[str, str] = field(default_factory=dict)
@@ -106,6 +107,18 @@ class WorkflowContext:
         item.status = "resolved"
         item.resolved_at = time.time()
         item.resolution_note = note
+
+    def add_feedback(self, item: FeedbackItem):
+        """Append a feedback item to the context's feedback list.
+
+        Convenience helper used by the web/orchestration layer (e.g. when the
+        user clicks Auto-Fix and the tester RCA is converted into structured
+        feedback that the Coder agent can consume on the next iteration).
+        """
+        if item.run_id is None:
+            item.run_id = self.run_id
+        self.feedback_items.append(item)
+        return item
 
     def add_human_action(self, stage: str, action: str, feedback: str = ""):
         """Record a human decision in the audit log."""
