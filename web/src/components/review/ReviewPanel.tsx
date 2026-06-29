@@ -2,9 +2,10 @@ import { useState, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ShieldCheck, CheckCircle2, XCircle, Edit3, RotateCcw,
-  Eye, Activity, Clock, FileText, ChevronDown, ChevronRight,
-  SkipForward, MonitorPlay, Wand2, Ban, PanelRightClose, PanelRightOpen,
-  Copy, Check, AlertTriangle, Sparkles,
+  Eye, Activity, Clock, ChevronDown, ChevronRight,
+  SkipForward, Wand2, Ban, PanelRightClose, PanelRightOpen,
+  Copy, Check, AlertTriangle, Sparkles, Terminal as TerminalIcon,
+  Files, ClipboardCheck,
 } from 'lucide-react'
 import { useSessionStore } from '../../store/sessionStore'
 import { useSession } from '../../hooks/useSession'
@@ -101,26 +102,26 @@ function parseIssue(raw: unknown): ParsedIssue | ParsedIssue[] {
   return { description: cleaned || raw, raw }
 }
 
-function severityStyle(sev?: string): { bg: string; fg: string; label: string } {
+function severityStyle(sev?: string): { bg: string; fg: string; label: string; ring: string } {
   switch ((sev || '').toLowerCase()) {
-    case 'critical': return { bg: 'rgba(239,68,68,0.16)', fg: 'var(--error)',   label: 'CRITICAL' }
+    case 'critical': return { bg: 'rgba(239,68,68,0.16)',  fg: '#F87171', label: 'CRITICAL',    ring: 'rgba(239,68,68,0.30)'  }
     case 'high':
-    case 'major':   return { bg: 'rgba(249,115,22,0.16)', fg: '#f97316',      label: 'HIGH' }
+    case 'major':   return { bg: 'rgba(249,115,22,0.16)', fg: '#FB923C', label: 'HIGH',        ring: 'rgba(249,115,22,0.30)' }
     case 'medium':
-    case 'minor':   return { bg: 'rgba(234,179,8,0.16)',  fg: 'var(--warning)',label: 'MEDIUM' }
-    case 'low':
+    case 'minor':   return { bg: 'rgba(245,158,11,0.16)', fg: 'var(--warning)', label: 'MEDIUM', ring: 'rgba(245,158,11,0.30)' }
+    case 'low':     return { bg: 'rgba(99,102,241,0.16)', fg: '#A5B4FC', label: 'LOW',         ring: 'rgba(99,102,241,0.30)' }
     case 'suggestion':
-    case 'info':    return { bg: 'rgba(99,102,241,0.16)', fg: 'var(--primary)',label: sev?.toUpperCase() || 'LOW' }
-    default:        return { bg: 'var(--bg-input)',       fg: 'var(--text-3)', label: (sev || 'INFO').toUpperCase() }
+    case 'info':    return { bg: 'rgba(34,197,94,0.16)',  fg: 'var(--success)', label: 'SUGGESTION', ring: 'rgba(34,197,94,0.30)'  }
+    default:        return { bg: 'var(--bg-input)',      fg: 'var(--text-2)',  label: (sev || 'INFO').toUpperCase(), ring: 'var(--border)' }
   }
 }
 
 // ─────────────────────────────────────────────────────────────
 // Design tokens (kept in one place for consistency)
 // ─────────────────────────────────────────────────────────────
-const CARD_PADDING = 16
-const CARD_GAP     = 16
-const CARD_RADIUS  = 12
+const CARD_PADDING   = 18
+const CARD_GAP       = 16
+const CARD_RADIUS    = 12
 
 const cardBase = {
   background: 'var(--bg-card)',
@@ -130,9 +131,9 @@ const cardBase = {
 } as const
 
 const sectionTitleStyle = {
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 600,
-  letterSpacing: '0.06em',
+  letterSpacing: '0.08em',
   textTransform: 'uppercase' as const,
   color: 'var(--text-2)',
 } as const
@@ -344,7 +345,7 @@ export default function ReviewPanel() {
               exit={{ height: 0, opacity: 0 }}
               style={{ overflow: 'hidden' }}
             >
-              <div style={cardBase}>
+              <Card>
                 <SectionTitle icon={Edit3} title="Feedback for the AI" />
                 <textarea
                   value={feedback}
@@ -356,17 +357,18 @@ export default function ReviewPanel() {
                     background: 'var(--bg-input)',
                     border: '1px solid var(--border)',
                     borderRadius: 8,
-                    padding: '10px 12px',
+                    padding: '12px 14px',
                     fontSize: 13,
                     color: 'var(--text-1)',
                     resize: 'vertical',
                     outline: 'none',
                     fontFamily: 'inherit',
+                    lineHeight: 1.55,
                   }}
                   onFocus={e => (e.currentTarget.style.borderColor = 'var(--primary)')}
                   onBlur={e => (e.currentTarget.style.borderColor = 'var(--border)')}
                 />
-              </div>
+              </Card>
             </motion.div>
           )}
         </AnimatePresence>
@@ -379,7 +381,13 @@ export default function ReviewPanel() {
           return failures.length > 0 ? <FailedTestsCard failures={failures} /> : null
         })()}
 
-        {/* ═══════════ 6. Root Cause Analysis ═══════════ */}
+        {/* ═══════════ 5. Metrics ═══════════ */}
+        {metrics && <MetricsCard metrics={metrics} testResults={testResults} />}
+
+        {/* ═══════════ 6. Issues (parsed) ═══════════ */}
+        {parsedIssues.length > 0 && <IssuesCard issues={parsedIssues} />}
+
+        {/* ═══════════ 7. Root Cause Analysis ═══════════ */}
         {(() => {
           const rcaList = (checkpoint?.data?.rca_data as any)?.rca
             || (testResults?.rca_data as any)?.rca
@@ -387,13 +395,7 @@ export default function ReviewPanel() {
           return rcaList.length > 0 ? <RcaCard items={rcaList} /> : null
         })()}
 
-        {/* ═══════════ 7. Issues (parsed) ═══════════ */}
-        {parsedIssues.length > 0 && <IssuesCard issues={parsedIssues} />}
-
-        {/* ═══════════ 8. Metrics ═══════════ */}
-        {metrics && <MetricsCard metrics={metrics} testResults={testResults} />}
-
-        {/* ═══════════ 9. Terminal Output (collapsible) ═══════════ */}
+        {/* ═══════════ 8. Terminal Output (collapsible) ═══════════ */}
         {(() => {
           const termOut = testResults?.output
             || (checkpoint?.data?.output as string)
@@ -403,6 +405,9 @@ export default function ReviewPanel() {
             || 'unknown'
           return termOut ? <TerminalOutputCard output={termOut} executionMode={execMode} /> : null
         })()}
+
+        {/* ═══════════ 9. Recommendations ═══════════ */}
+        <RecommendationsCard passRate={passRateInfo.rate} parsedIssuesCount={parsedIssues.length} />
 
         {/* ═══════════ 10. Generated Files ═══════════ */}
         {fileList.length > 0 && <GeneratedFilesCard files={fileList} contents={fileContents} onSelect={selectFile} />}
@@ -420,11 +425,11 @@ export default function ReviewPanel() {
 
 function Card({ children, accent }: { children: React.ReactNode; accent?: 'success' | 'warning' | 'error' }) {
   const accentColor = accent === 'success' ? 'rgba(34,197,94,0.25)'
-    : accent === 'warning' ? 'rgba(234,179,8,0.25)'
+    : accent === 'warning' ? 'rgba(245,158,11,0.25)'
     : accent === 'error' ? 'rgba(239,68,68,0.25)'
     : 'var(--border)'
   const shadow = accent === 'success' ? '0 0 0 1px rgba(34,197,94,0.08)'
-    : accent === 'warning' ? '0 0 0 1px rgba(234,179,8,0.08)'
+    : accent === 'warning' ? '0 0 0 1px rgba(245,158,11,0.08)'
     : accent === 'error' ? '0 0 0 1px rgba(239,68,68,0.08)'
     : 'none'
   return (
@@ -435,6 +440,11 @@ function Card({ children, accent }: { children: React.ReactNode; accent?: 'succe
         ...cardBase,
         borderColor: accentColor,
         boxShadow: shadow,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+        minWidth: 0,
+        maxWidth: '100%',
       }}
     >
       {children}
@@ -442,18 +452,24 @@ function Card({ children, accent }: { children: React.ReactNode; accent?: 'succe
   )
 }
 
-function SectionTitle({ icon: Icon, title, count, badge }: {
+function SectionTitle({ icon: Icon, title, count, badge, right }: {
   icon: React.ElementType
   title: string
   count?: number
   badge?: { label: string; color: string; bg: string }
+  right?: React.ReactNode
 }) {
   return (
     <div
       className="flex items-center gap-2"
-      style={{ marginBottom: 14, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}
+      style={{
+        paddingBottom: 12,
+        borderBottom: '1px solid var(--border)',
+        flexShrink: 0,
+        width: '100%',
+      }}
     >
-      <Icon size={14} strokeWidth={2} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+      <Icon size={13} strokeWidth={2.2} style={{ color: 'var(--primary)', flexShrink: 0 }} />
       <span style={{ ...sectionTitleStyle, flex: 1 }}>{title}</span>
       {count !== undefined && (
         <span style={{
@@ -468,12 +484,13 @@ function SectionTitle({ icon: Icon, title, count, badge }: {
         <span style={{
           fontSize: 10, fontWeight: 700, letterSpacing: '0.06em',
           textTransform: 'uppercase',
-          padding: '2px 7px', borderRadius: 4,
+          padding: '3px 8px', borderRadius: 4,
           background: badge.bg, color: badge.color,
         }}>
           {badge.label}
         </span>
       )}
+      {right}
     </div>
   )
 }
@@ -483,21 +500,26 @@ function Metric({ label, value, valueColor }: { label: string; value: string | n
     <div style={{
       display: 'flex',
       flexDirection: 'column',
-      gap: 4,
-      padding: '10px 12px',
+      gap: 6,
+      padding: '12px 14px',
       background: 'var(--bg-input)',
       borderRadius: 8,
       border: '1px solid var(--border)',
+      minWidth: 0,
+      overflow: 'hidden',
     }}>
       <span style={{
-        fontSize: 10, fontWeight: 600, letterSpacing: '0.06em',
+        fontSize: 10, fontWeight: 600, letterSpacing: '0.08em',
         textTransform: 'uppercase',
         color: 'var(--text-3)',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
       }}>
         {label}
       </span>
       <span style={{
-        fontSize: 15, fontWeight: 600,
+        fontSize: 16, fontWeight: 600,
         color: valueColor || 'var(--text-1)',
         fontVariantNumeric: 'tabular-nums',
         overflow: 'hidden',
@@ -516,21 +538,21 @@ function EmptyState() {
       <div style={{
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
-        textAlign: 'center', gap: 10, padding: '12px 8px',
+        textAlign: 'center', gap: 12, padding: '24px 16px',
       }}>
         <div style={{
-          width: 44, height: 44, borderRadius: 12,
+          width: 52, height: 52, borderRadius: 14,
           background: 'var(--bg-base)',
           border: '1px solid var(--border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <ShieldCheck size={22} style={{ color: 'var(--text-3)' }} />
+          <ShieldCheck size={26} style={{ color: 'var(--text-3)' }} />
         </div>
-        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-2)' }}>
+        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', margin: 0 }}>
           Awaiting pipeline start
         </p>
-        <p style={{ fontSize: 12, color: 'var(--text-3)' }}>
-          Enter a prompt to get started
+        <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0, maxWidth: 240, lineHeight: 1.55 }}>
+          Configure planning modules and describe your project to begin.
         </p>
       </div>
     </Card>
@@ -543,21 +565,21 @@ function RunningState() {
       <div style={{
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
-        textAlign: 'center', gap: 10, padding: '12px 8px',
+        textAlign: 'center', gap: 12, padding: '24px 16px',
       }}>
         <div style={{
-          width: 44, height: 44, borderRadius: 12,
+          width: 52, height: 52, borderRadius: 14,
           background: 'var(--bg-base)',
           border: '1px solid var(--border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <ShieldCheck size={22} style={{ color: 'var(--primary)' }} className="pulse-ring" />
+          <ShieldCheck size={26} style={{ color: 'var(--primary)' }} className="pulse-ring" />
         </div>
-        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-2)' }}>
+        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', margin: 0 }}>
           Pipeline running…
         </p>
-        <p style={{ fontSize: 12, color: 'var(--text-3)' }}>
-          Summary will appear once validation finishes
+        <p style={{ fontSize: 12, color: 'var(--text-3)', margin: 0, maxWidth: 240, lineHeight: 1.55 }}>
+          The Planning Agent is analyzing your requirements.
         </p>
       </div>
     </Card>
@@ -573,12 +595,12 @@ function ActionRequiredCard({ status, message }: { status: string; message: stri
     <Card accent={accent as any}>
       <div style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
-        padding: '4px 10px', borderRadius: 99,
+        padding: '5px 11px', borderRadius: 99,
         background: accent === 'success' ? 'var(--success-dim)' : accent === 'warning' ? 'var(--warning-dim)' : 'var(--error-dim)',
         color: accent === 'success' ? 'var(--success)' : accent === 'warning' ? 'var(--warning)' : 'var(--error)',
         fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
         textTransform: 'uppercase',
-        marginBottom: 12,
+        alignSelf: 'flex-start',
       }}>
         {accent === 'success' && <CheckCircle2 size={12} />}
         {accent === 'warning' && <AlertTriangle size={12} />}
@@ -588,6 +610,7 @@ function ActionRequiredCard({ status, message }: { status: string; message: stri
       <p style={{
         fontSize: 13, color: 'var(--text-2)',
         lineHeight: 1.6, margin: 0,
+        wordBreak: 'break-word',
       }}>
         {message}
       </p>
@@ -607,7 +630,7 @@ function TestingSummaryCard({ summary, passRate, passRatePct, coverage, duration
     <Card>
       <SectionTitle
         icon={isMajority ? CheckCircle2 : XCircle}
-        title="Testing Summary"
+        title="Test Results"
         badge={{
           label: isMajority ? 'PASSED' : 'FAILED',
           color: isMajority ? 'var(--success)' : 'var(--error)',
@@ -619,7 +642,7 @@ function TestingSummaryCard({ summary, passRate, passRatePct, coverage, duration
         gridTemplateColumns: '1fr 1fr',
         gap: 10,
       }}>
-        <Metric label="Tests Collected" value={summary.collected || 0} />
+        <Metric label="Tests Executed" value={summary.collected || 0} />
         <Metric label="Passed" value={summary.passed || 0} valueColor="var(--success)" />
         <Metric label="Failed" value={summary.failed || 0} valueColor="var(--error)" />
         <Metric label="Skipped" value={summary.skipped || 0} />
@@ -627,22 +650,22 @@ function TestingSummaryCard({ summary, passRate, passRatePct, coverage, duration
         <Metric label="Execution Time" value={`${duration.toFixed(2)}s`} />
       </div>
       <div style={{
-        marginTop: 12,
-        padding: '12px 14px',
-        borderRadius: 8,
+        padding: '14px 16px',
+        borderRadius: 10,
         background: passRate >= PASS_RATE_THRESHOLD ? 'var(--success-dim)' : 'var(--warning-dim)',
-        border: `1px solid ${passRate >= PASS_RATE_THRESHOLD ? 'rgba(34,197,94,0.3)' : 'rgba(234,179,8,0.3)'}`,
+        border: `1px solid ${passRate >= PASS_RATE_THRESHOLD ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        gap: 10,
       }}>
         <span style={{
-          fontSize: 11, fontWeight: 600,
+          fontSize: 11, fontWeight: 700,
           color: passRate >= PASS_RATE_THRESHOLD ? 'var(--success)' : 'var(--warning)',
-          textTransform: 'uppercase', letterSpacing: '0.05em',
+          textTransform: 'uppercase', letterSpacing: '0.08em',
         }}>
           Success Rate
         </span>
         <span style={{
-          fontSize: 18, fontWeight: 700,
+          fontSize: 20, fontWeight: 700,
           color: passRate >= PASS_RATE_THRESHOLD ? 'var(--success)' : 'var(--warning)',
           fontVariantNumeric: 'tabular-nums',
         }}>
@@ -666,21 +689,21 @@ function ActionButtonsCard({ isTestReview, confirmBypass, passRate, onAction, on
 }) {
   return (
     <Card>
-      <SectionTitle icon={Sparkles} title="Actions" />
+      <SectionTitle icon={Sparkles} title="Action Buttons" />
       {isTestReview && confirmBypass ? (
         <>
           <div style={{
             fontSize: 13,
             color: 'var(--warning)',
             background: 'var(--warning-dim)',
-            padding: '12px 14px',
-            borderRadius: 8,
-            marginBottom: 12,
-            border: '1px solid rgba(234,179,8,0.3)',
+            padding: '14px 16px',
+            borderRadius: 10,
+            border: '1px solid rgba(245,158,11,0.3)',
+            lineHeight: 1.55,
           }}>
             Continue to Code Review despite failed tests?
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, width: '100%' }}>
             <ActionButton icon={SkipForward} label="Proceed" subtitle="Continue" color="primary" onClick={() => onAction('bypass')} />
             <ActionButton icon={XCircle}    label="Cancel"  subtitle="Stay here"  color="muted"   onClick={onCancelBypass} />
           </div>
@@ -689,15 +712,15 @@ function ActionButtonsCard({ isTestReview, confirmBypass, passRate, onAction, on
         <>
           <div style={{
             fontSize: 12,
-            padding: '8px 12px',
-            borderRadius: 8,
-            marginBottom: 12,
+            padding: '12px 14px',
+            borderRadius: 10,
             background: passRate >= PASS_RATE_THRESHOLD ? 'var(--success-dim)' : 'var(--warning-dim)',
             color: passRate >= PASS_RATE_THRESHOLD ? 'var(--success)' : 'var(--warning)',
-            border: `1px solid ${passRate >= PASS_RATE_THRESHOLD ? 'rgba(34,197,94,0.3)' : 'rgba(234,179,8,0.3)'}`,
-            display: 'flex', alignItems: 'center', gap: 8,
+            border: `1px solid ${passRate >= PASS_RATE_THRESHOLD ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`,
+            display: 'flex', alignItems: 'center', gap: 10,
+            lineHeight: 1.5,
           }}>
-            {passRate >= PASS_RATE_THRESHOLD ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+            {passRate >= PASS_RATE_THRESHOLD ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
             <span style={{ fontWeight: 600 }}>
               {passRate === 0
                 ? 'No tests were collected.'
@@ -708,7 +731,7 @@ function ActionButtonsCard({ isTestReview, confirmBypass, passRate, onAction, on
           </div>
           {passRate >= PASS_RATE_THRESHOLD ? (
             // ≥ 70%: Approve / Auto-Fix / Bypass / Reject
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, width: '100%' }}>
               <ActionButton icon={CheckCircle2} label="Approve"  subtitle="→ Review"  color="success" onClick={() => onAction('approve')} />
               <ActionButton icon={Wand2}        label="Auto Fix" subtitle="→ Coding"  color="primary" onClick={() => onAction('auto_fix')} />
               <ActionButton icon={SkipForward}  label="Bypass"   subtitle="→ Review"  color="muted"   onClick={() => onAction('bypass')} />
@@ -716,7 +739,7 @@ function ActionButtonsCard({ isTestReview, confirmBypass, passRate, onAction, on
             </div>
           ) : (
             // < 70%: Auto-Fix / Revoke / Edit / Reject
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, width: '100%' }}>
               <ActionButton icon={Wand2}  label="Auto Fix"   subtitle="→ Coding" color="primary" onClick={() => onAction('auto_fix')} />
               <ActionButton icon={Ban}    label="Revoke"     subtitle="Retry"   color="muted"   onClick={() => onAction('retry')} />
               <ActionButton icon={Edit3}  label="Edit Code"  subtitle="Manual"  color="primary" onClick={onToggleEdit} />
@@ -726,7 +749,7 @@ function ActionButtonsCard({ isTestReview, confirmBypass, passRate, onAction, on
         </>
       ) : (
         // final_review or other checkpoints
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, width: '100%' }}>
           <ActionButton icon={CheckCircle2} label="Approve"    color="success" onClick={() => onAction('approve')} />
           <ActionButton icon={XCircle}      label="Reject"     color="error"   onClick={() => onAction('reject')} />
           <ActionButton icon={Edit3}        label="Edit"       color="primary" onClick={onToggleEdit} />
@@ -761,16 +784,19 @@ function ActionButton({ icon: Icon, label, subtitle, color, onClick }: {
         alignItems: 'center',
         justifyContent: 'center',
         gap: 4,
-        padding: '12px 14px',
+        padding: '14px 12px',
         background: c.bg,
         border: `1px solid ${c.border}`,
         borderRadius: 10,
         color: c.text,
         cursor: 'pointer',
-        minHeight: 64,
+        height: 76,
+        minHeight: 76,
+        maxHeight: 76,
         textAlign: 'center',
         fontFamily: 'inherit',
         width: '100%',
+        boxSizing: 'border-box',
       }}
       onMouseEnter={e => { e.currentTarget.style.background = c.hover }}
       onMouseLeave={e => { e.currentTarget.style.background = c.bg }}
@@ -801,7 +827,7 @@ function FailedTestsCard({ failures }: { failures: any[] }) {
           bg: 'var(--error-dim)',
         }}
       />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
         {failures.map((f: any, idx: number) => (
           <ExpandableFailure key={idx} failure={f} />
         ))}
@@ -818,6 +844,7 @@ function ExpandableFailure({ failure }: { failure: any }) {
       border: '1px solid var(--border)',
       borderRadius: 8,
       overflow: 'hidden',
+      width: '100%',
     }}>
       <button
         onClick={() => setOpen(o => !o)}
@@ -859,7 +886,7 @@ function ExpandableFailure({ failure }: { failure: any }) {
             exit={{ height: 0, opacity: 0 }}
             style={{ overflow: 'hidden', borderTop: '1px solid var(--border)' }}
           >
-            <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
               {failure.file && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                   <span style={{ fontWeight: 600 }}>File:</span>{' '}
@@ -870,17 +897,19 @@ function ExpandableFailure({ failure }: { failure: any }) {
               )}
               {failure.exception && (
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', marginBottom: 4, textTransform: 'uppercase' }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                     Exception
                   </div>
                   <div style={{
                     fontSize: 11, fontFamily: 'monospace',
                     color: 'var(--error)',
                     background: 'var(--bg-input)',
-                    padding: '8px 10px',
-                    borderRadius: 6,
+                    padding: '10px 12px',
+                    borderRadius: 8,
                     wordBreak: 'break-word',
                     whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
+                    maxWidth: '100%',
                   }}>
                     {failure.exception}
                   </div>
@@ -888,15 +917,17 @@ function ExpandableFailure({ failure }: { failure: any }) {
               )}
               {failure.assertion && (
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', marginBottom: 4, textTransform: 'uppercase' }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                     Assertion
                   </div>
                   <div style={{
                     fontSize: 11, fontFamily: 'monospace',
                     color: 'var(--text-2)',
                     background: 'var(--bg-input)',
-                    padding: '8px 10px',
-                    borderRadius: 6,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    wordBreak: 'break-word',
+                    overflowWrap: 'anywhere',
                   }}>
                     {failure.assertion}
                   </div>
@@ -904,16 +935,18 @@ function ExpandableFailure({ failure }: { failure: any }) {
               )}
               {failure.expected_actual && (
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', marginBottom: 4, textTransform: 'uppercase' }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-3)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                     Expected vs Actual
                   </div>
                   <div style={{
                     fontSize: 11, fontFamily: 'monospace',
                     color: 'var(--text-2)',
                     background: 'var(--bg-input)',
-                    padding: '8px 10px',
-                    borderRadius: 6,
+                    padding: '10px 12px',
+                    borderRadius: 8,
                     whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    overflowWrap: 'anywhere',
                   }}>
                     {failure.expected_actual}
                   </div>
@@ -932,7 +965,7 @@ function ExpandableFailure({ failure }: { failure: any }) {
                     color: 'var(--text-3)',
                     background: 'var(--bg-input)',
                     padding: '10px 12px',
-                    borderRadius: 6,
+                    borderRadius: 8,
                     overflow: 'auto',
                     maxHeight: 240,
                     whiteSpace: 'pre-wrap',
@@ -964,7 +997,7 @@ function RcaCard({ items }: { items: any[] }) {
           bg: 'var(--warning-dim)',
         }}
       />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
         {items.map((rca: any, idx: number) => (
           <ExpandableRca key={idx} rca={rca} />
         ))}
@@ -979,8 +1012,9 @@ function ExpandableRca({ rca }: { rca: any }) {
     <div style={{
       background: 'var(--bg-base)',
       border: '1px solid var(--border)',
-      borderRadius: 8,
+      borderRadius: 10,
       overflow: 'hidden',
+      width: '100%',
     }}>
       <button
         onClick={() => setOpen(o => !o)}
@@ -994,10 +1028,13 @@ function ExpandableRca({ rca }: { rca: any }) {
         }}
       >
         {open
-          ? <ChevronDown size={14} style={{ color: 'var(--text-3)' }} />
-          : <ChevronRight size={14} style={{ color: 'var(--text-3)' }} />}
+          ? <ChevronDown size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+          : <ChevronRight size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
+          <div style={{
+            fontSize: 13, fontWeight: 600, color: 'var(--text-1)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
             {rca.category || 'Root Cause'}
           </div>
           {rca.caused_by_file && (
@@ -1014,7 +1051,7 @@ function ExpandableRca({ rca }: { rca: any }) {
         {rca.confidence_score !== undefined && (
           <span style={{
             fontSize: 10, fontWeight: 700,
-            padding: '3px 7px', borderRadius: 4,
+            padding: '3px 8px', borderRadius: 4,
             background: 'var(--primary-dim)', color: 'var(--primary)',
             flexShrink: 0,
           }}>
@@ -1041,7 +1078,7 @@ function ExpandableRca({ rca }: { rca: any }) {
                 <div>
                   <div style={{
                     fontSize: 10, fontWeight: 600, color: 'var(--primary)',
-                    textTransform: 'uppercase', letterSpacing: '0.06em',
+                    textTransform: 'uppercase', letterSpacing: '0.08em',
                     marginBottom: 6,
                   }}>
                     Suggested Fix
@@ -1050,9 +1087,11 @@ function ExpandableRca({ rca }: { rca: any }) {
                     fontSize: 12, color: 'var(--text-1)',
                     background: 'rgba(99,102,241,0.08)',
                     border: '1px dashed rgba(99,102,241,0.3)',
-                    padding: '10px 12px',
-                    borderRadius: 6,
-                    lineHeight: 1.5,
+                    padding: '12px 14px',
+                    borderRadius: 8,
+                    lineHeight: 1.55,
+                    wordBreak: 'break-word',
+                    overflowWrap: 'anywhere',
                   }}>
                     {rca.suggested_fix}
                   </div>
@@ -1068,11 +1107,11 @@ function ExpandableRca({ rca }: { rca: any }) {
 
 function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div>
+    <div style={{ width: '100%' }}>
       <div style={{
         fontSize: 10, fontWeight: 600, color: 'var(--text-3)',
-        textTransform: 'uppercase', letterSpacing: '0.06em',
-        marginBottom: 4,
+        textTransform: 'uppercase', letterSpacing: '0.08em',
+        marginBottom: 6,
       }}>
         {label}
       </div>
@@ -1080,10 +1119,14 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
         fontSize: 12, color: 'var(--text-1)',
         fontFamily: mono ? 'monospace' : 'inherit',
         background: 'var(--bg-input)',
-        padding: '8px 10px',
-        borderRadius: 6,
+        padding: '10px 12px',
+        borderRadius: 8,
         wordBreak: 'break-word',
-        lineHeight: 1.5,
+        overflowWrap: 'anywhere',
+        lineHeight: 1.55,
+        width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
       }}>
         {value}
       </div>
@@ -1096,7 +1139,7 @@ function IssuesCard({ issues }: { issues: ParsedIssue[] }) {
     <Card>
       <SectionTitle
         icon={ShieldCheck}
-        title="Review Issues"
+        title="Issues"
         count={issues.length}
         badge={{
           label: `${issues.length} TOTAL`,
@@ -1104,7 +1147,7 @@ function IssuesCard({ issues }: { issues: ParsedIssue[] }) {
           bg: 'var(--primary-dim)',
         }}
       />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
         {issues.slice(0, 8).map((issue, idx) => (
           <IssueCard key={idx} issue={issue} />
         ))}
@@ -1128,27 +1171,38 @@ function IssueCard({ issue }: { issue: ParsedIssue }) {
   return (
     <div style={{
       background: 'var(--bg-base)',
-      border: '1px solid var(--border)',
-      borderRadius: 8,
-      padding: '12px 14px',
+      border: `1px solid ${sev.ring}`,
+      borderRadius: 10,
+      padding: '14px 16px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+      width: '100%',
+      boxSizing: 'border-box',
+      minWidth: 0,
     }}>
+      {/* Top row: Severity + Category + Location */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        marginBottom: 8, flexWrap: 'wrap',
+        flexWrap: 'wrap',
+        width: '100%',
       }}>
         <span style={{
-          fontSize: 10, fontWeight: 700, letterSpacing: '0.06em',
-          padding: '3px 8px', borderRadius: 4,
+          fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+          padding: '4px 9px', borderRadius: 4,
           background: sev.bg, color: sev.fg,
+          flexShrink: 0,
         }}>
           {sev.label}
         </span>
         {issue.category && (
           <span style={{
             fontSize: 10, fontWeight: 600,
-            padding: '3px 7px', borderRadius: 4,
+            padding: '4px 8px', borderRadius: 4,
             background: 'var(--bg-input)', color: 'var(--text-2)',
             textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            flexShrink: 0,
           }}>
             {issue.category}
           </span>
@@ -1159,26 +1213,35 @@ function IssueCard({ issue }: { issue: ParsedIssue }) {
             color: 'var(--text-3)',
             marginLeft: 'auto',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            maxWidth: '60%',
+            maxWidth: '100%',
+            minWidth: 0,
+            flex: 1,
+            textAlign: 'right',
           }}>
             {locationStr}{issue.line ? `:${issue.line}` : ''}
           </span>
         )}
       </div>
-      {(issue.title || issue.description) && (
+      {/* Title */}
+      {issue.title && (
         <div style={{
-          fontSize: 12, color: 'var(--text-1)',
+          fontSize: 13, fontWeight: 600, color: 'var(--text-1)',
+          lineHeight: 1.4,
+          wordBreak: 'break-word',
+          overflowWrap: 'anywhere',
+        }}>
+          {issue.title}
+        </div>
+      )}
+      {/* Description */}
+      {issue.description && (
+        <div style={{
+          fontSize: 12, color: 'var(--text-2)',
           lineHeight: 1.55,
           wordBreak: 'break-word',
+          overflowWrap: 'anywhere',
         }}>
-          {issue.title && (
-            <div style={{ fontWeight: 600, marginBottom: issue.description ? 4 : 0 }}>
-              {issue.title}
-            </div>
-          )}
-          {issue.description && (
-            <div style={{ color: 'var(--text-2)' }}>{issue.description}</div>
-          )}
+          {issue.description}
         </div>
       )}
     </div>
@@ -1187,17 +1250,17 @@ function IssueCard({ issue }: { issue: ParsedIssue }) {
 
 function MetricsCard({ metrics, testResults }: { metrics: any; testResults: any }) {
   const items: { label: string; value: string; color?: string }[] = []
-  items.push({ label: 'Total Time', value: `${metrics.total_time || 0}s` })
-  items.push({ label: 'Attempts', value: String(metrics.attempts || 1) })
-  items.push({ label: 'Files', value: String(metrics.files_count || 0) })
+  items.push({ label: 'Total Time',      value: `${metrics.total_time || 0}s` })
+  items.push({ label: 'Attempts',        value: String(metrics.attempts || 1) })
+  items.push({ label: 'Files',           value: String(metrics.files_count || 0) })
   if (testResults) {
-    items.push({ label: 'Tests', value: String((testResults.report_data as any)?.summary?.collected || 0) })
-    items.push({ label: 'Passed', value: String((testResults.report_data as any)?.summary?.passed || 0), color: 'var(--success)' })
-    items.push({ label: 'Failed', value: String((testResults.report_data as any)?.summary?.failed || 0), color: 'var(--error)' })
+    items.push({ label: 'Tests Executed',  value: String((testResults.report_data as any)?.summary?.collected || 0) })
+    items.push({ label: 'Passed',          value: String((testResults.report_data as any)?.summary?.passed || 0), color: 'var(--success)' })
+    items.push({ label: 'Failed',          value: String((testResults.report_data as any)?.summary?.failed || 0), color: 'var(--error)' })
   }
-  items.push({ label: 'Coverage', value: `${Number(metrics.coverage || 0).toFixed(1)}%` })
+  items.push({ label: 'Coverage',        value: `${Number(metrics.coverage || 0).toFixed(1)}%` })
   if (metrics.pylint_score !== undefined) {
-    items.push({ label: 'Pylint Score', value: `${Number(metrics.pylint_score).toFixed(1)}/10` })
+    items.push({ label: 'Pylint Score',    value: `${Number(metrics.pylint_score).toFixed(1)}/10` })
   }
   return (
     <Card>
@@ -1206,6 +1269,7 @@ function MetricsCard({ metrics, testResults }: { metrics: any; testResults: any 
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
         gap: 10,
+        width: '100%',
       }}>
         {items.map((it, idx) => (
           <Metric key={idx} label={it.label} value={it.value} valueColor={it.color} />
@@ -1233,22 +1297,24 @@ function TerminalOutputCard({ output, executionMode }: { output: string; executi
         className="flex items-center w-full text-left"
         style={{
           background: 'transparent', border: 'none',
-          cursor: 'pointer', padding: 0, marginBottom: open ? 12 : 0,
+          cursor: 'pointer', padding: 0,
           width: '100%',
         }}
       >
         <SectionTitle
-          icon={MonitorPlay}
-          title="Terminal Output"
+          icon={TerminalIcon}
+          title="Terminal Output / Logs"
           badge={{
             label: isDocker ? 'DOCKER' : 'LOCAL',
             color: isDocker ? '#22c55e' : '#f97316',
             bg: isDocker ? 'rgba(34,197,94,0.15)' : 'rgba(249,115,22,0.15)',
           }}
+          right={
+            <span style={{ color: 'var(--text-3)', display: 'flex' }}>
+              {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </span>
+          }
         />
-        <span style={{ marginLeft: 8, color: 'var(--text-3)' }}>
-          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </span>
       </button>
       <AnimatePresence initial={false}>
         {open && (
@@ -1260,17 +1326,19 @@ function TerminalOutputCard({ output, executionMode }: { output: string; executi
           >
             <div style={{
               background: '#0d1117',
-              borderRadius: 8,
+              borderRadius: 10,
               border: '1px solid var(--border)',
               overflow: 'hidden',
+              width: '100%',
+              maxWidth: '100%',
             }}>
               <div style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '8px 12px',
+                padding: '10px 14px',
                 borderBottom: '1px solid rgba(255,255,255,0.05)',
                 background: 'rgba(255,255,255,0.02)',
               }}>
-                <span style={{ fontSize: 10, fontWeight: 600, color: '#7d8590', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <span style={{ fontSize: 10, fontWeight: 600, color: '#7d8590', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                   {executionMode}
                 </span>
                 <button
@@ -1280,8 +1348,9 @@ function TerminalOutputCard({ output, executionMode }: { output: string; executi
                     background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
                     color: copied ? '#22c55e' : '#7d8590',
                     fontSize: 10, fontWeight: 600,
-                    padding: '3px 8px', borderRadius: 4,
+                    padding: '4px 9px', borderRadius: 4,
                     cursor: 'pointer', textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
                   }}
                   onMouseEnter={e => { if (!copied) e.currentTarget.style.borderColor = 'rgba(255,255,255,0.3)' }}
                   onMouseLeave={e => { if (!copied) e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)' }}
@@ -1292,7 +1361,7 @@ function TerminalOutputCard({ output, executionMode }: { output: string; executi
               </div>
               <pre style={{
                 margin: 0,
-                padding: '12px 14px',
+                padding: '14px 16px',
                 background: '#0d1117',
                 color: '#c9d1d9',
                 fontFamily: '"JetBrains Mono", "Fira Code", "Consolas", monospace',
@@ -1303,6 +1372,7 @@ function TerminalOutputCard({ output, executionMode }: { output: string; executi
                 overflowX: 'auto',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
+                overflowWrap: 'anywhere',
               }}>
                 {output}
               </pre>
@@ -1314,6 +1384,69 @@ function TerminalOutputCard({ output, executionMode }: { output: string; executi
   )
 }
 
+function RecommendationsCard({ passRate, parsedIssuesCount }: { passRate: number; parsedIssuesCount: number }) {
+  const recs: { label: string; text: string; icon: React.ElementType }[] = []
+  if (parsedIssuesCount > 0) {
+    recs.push({
+      label: 'Address issues',
+      text: `${parsedIssuesCount} issue${parsedIssuesCount === 1 ? '' : 's'} detected. Review and fix them in the next iteration.`,
+      icon: ShieldCheck,
+    })
+  }
+  if (passRate > 0 && passRate < PASS_RATE_THRESHOLD) {
+    recs.push({
+      label: 'Improve test coverage',
+      text: 'Pass rate is below 70%. Investigate failing tests and add assertions for edge cases.',
+      icon: ClipboardCheck,
+    })
+  }
+  if (recs.length === 0) {
+    recs.push({
+      label: 'All good',
+      text: 'No further action needed. You can approve the current run or request a regeneration.',
+      icon: CheckCircle2,
+    })
+  }
+  return (
+    <Card>
+      <SectionTitle icon={Sparkles} title="Recommendations" />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+        {recs.map((r, i) => (
+          <div key={i} style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            padding: '12px 14px',
+            background: 'var(--bg-base)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            width: '100%',
+            boxSizing: 'border-box',
+          }}>
+            <r.icon size={14} strokeWidth={2} style={{ color: 'var(--primary)', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{
+                fontSize: 12, fontWeight: 600, color: 'var(--text-1)',
+                marginBottom: 2,
+              }}>
+                {r.label}
+              </div>
+              <div style={{
+                fontSize: 12, color: 'var(--text-2)',
+                lineHeight: 1.5,
+                wordBreak: 'break-word',
+                overflowWrap: 'anywhere',
+              }}>
+                {r.text}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 function GeneratedFilesCard({ files, contents, onSelect }: {
   files: string[]
   contents: Record<string, string>
@@ -1321,8 +1454,8 @@ function GeneratedFilesCard({ files, contents, onSelect }: {
 }) {
   return (
     <Card>
-      <SectionTitle icon={FileText} title="Generated Files" count={files.length} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <SectionTitle icon={Files} title="Generated Files" count={files.length} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
         {files.slice(0, 12).map(f => {
           const name = f.split('/').pop() || f
           const lines = contents[f]?.split('\n').length || 0
@@ -1332,10 +1465,11 @@ function GeneratedFilesCard({ files, contents, onSelect }: {
               onClick={() => onSelect(f)}
               className="flex items-center gap-2 rounded-md w-full text-left transition-colors duration-100"
               style={{
-                padding: '8px 10px',
+                padding: '9px 12px',
                 background: 'var(--bg-input)',
                 border: '1px solid var(--border)',
                 cursor: 'pointer',
+                minWidth: 0,
               }}
               onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)' }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)' }}
@@ -1374,10 +1508,10 @@ function FinalStatusCard() {
       <div style={{
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', textAlign: 'center',
-        gap: 10, padding: '4px 0',
+        gap: 12, padding: '12px 0',
       }}>
         <div style={{
-          width: 48, height: 48, borderRadius: 14,
+          width: 52, height: 52, borderRadius: 14,
           background: 'var(--success-dim)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
@@ -1385,12 +1519,12 @@ function FinalStatusCard() {
         </div>
         <div>
           <div style={{
-            fontSize: 14, fontWeight: 600, color: 'var(--success)',
+            fontSize: 15, fontWeight: 600, color: 'var(--success)',
             marginBottom: 4,
           }}>
             Pipeline Complete
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.55 }}>
             All artifacts saved to the workspace.
           </div>
         </div>

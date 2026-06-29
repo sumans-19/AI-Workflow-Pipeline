@@ -6,10 +6,32 @@ import type {
   CheckpointData,
   FileNode,
   MetricsData,
+  PlanningConfig,
+  PlanningDocument,
+  PlanningModuleId,
   SessionStatus,
   TestResultsData,
   TimelineStep,
 } from "../types";
+
+// All 15 planning module ids in canonical order.
+const ALL_MODULE_IDS: PlanningModuleId[] = [
+  "project_understanding",
+  "functional_requirements",
+  "folder_structure",
+  "architecture_design",
+  "component_breakdown",
+  "dependency_planning",
+  "data_flow",
+  "file_responsibilities",
+  "api_planning",
+  "database_planning",
+  "security_considerations",
+  "testing_strategy",
+  "code_standards",
+  "risks_challenges",
+  "execution_roadmap",
+];
 
 interface SessionState {
   /* Session */
@@ -43,6 +65,12 @@ interface SessionState {
   reviewOpen: boolean;
   explorerOpen: boolean;
 
+  /* ── Planning ── */
+  planningConfig: PlanningConfig;
+  planningDocument: PlanningDocument | null;
+  planningMode: 'config' | 'review' | 'idle';
+  planningModulesGenerated: string[];
+
   /* Actions */
   setSessionId: (id: string) => void;
   setStatus: (s: SessionStatus) => void;
@@ -63,6 +91,12 @@ interface SessionState {
   setTestResults: (r: TestResultsData) => void;
   setMetrics: (m: MetricsData) => void;
   setReviewIssues: (issues: string[]) => void;
+
+  setPlanningConfig: (cfg: PlanningConfig) => void;
+  togglePlanningModule: (moduleId: string, enabled: boolean) => void;
+  selectAllPlanningModules: (enabled: boolean) => void;
+  setPlanningDocument: (doc: PlanningDocument | null, generated?: string[]) => void;
+  setPlanningMode: (mode: 'config' | 'review' | 'idle') => void;
 
   reset: () => void;
 }
@@ -124,6 +158,11 @@ const initialState = {
   recentlyAdded: new Set<string>() as Set<string>,
   reviewOpen: true as boolean,
   explorerOpen: true as boolean,
+  // ── Planning defaults: NONE selected — user picks modules explicitly ──
+  planningConfig: { modules: ALL_MODULE_IDS.reduce((acc, id) => ({ ...acc, [id]: false }), {}) } as PlanningConfig,
+  planningDocument: null as PlanningDocument | null,
+  planningMode: "config" as "config" | "review" | "idle",
+  planningModulesGenerated: [] as string[],
 };
 
 // Separate record to track languages (not persisted in state directly)
@@ -188,6 +227,37 @@ export const useSessionStore = create<SessionState>((set, _get) => ({
   setTestResults: (r) => set({ testResults: r }),
   setMetrics: (m) => set({ metrics: m }),
   setReviewIssues: (issues) => set({ reviewIssues: issues }),
+
+  setPlanningConfig: (cfg) => set({ planningConfig: cfg }),
+  togglePlanningModule: (moduleId, enabled) =>
+    set((st) => ({
+      planningConfig: {
+        ...st.planningConfig,
+        modules: {
+          ...st.planningConfig.modules,
+          [moduleId]: enabled,
+        },
+      },
+    })),
+  selectAllPlanningModules: (enabled) =>
+    set((st) => {
+      const updatedModules = { ...st.planningConfig.modules };
+      for (const id of ALL_MODULE_IDS) {
+        updatedModules[id] = enabled;
+      }
+      return {
+        planningConfig: {
+          ...st.planningConfig,
+          modules: updatedModules,
+        },
+      };
+    }),
+  setPlanningDocument: (doc, generated) =>
+    set({
+      planningDocument: doc,
+      planningModulesGenerated: generated || [],
+    }),
+  setPlanningMode: (mode) => set({ planningMode: mode }),
 
   reset: () => {
     Object.keys(_fileLangs).forEach((k) => delete _fileLangs[k]);

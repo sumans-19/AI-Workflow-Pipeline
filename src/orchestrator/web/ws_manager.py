@@ -74,6 +74,45 @@ class ConnectionManager:
         replayed when the client reconnects.
         """
         message = json.dumps({"type": event_type, "data": data or {}})
+        await self._send_or_buffer(session_id, message, event_type)
+
+    async def broadcast_to_session(self, session_id: str, event: Any) -> None:
+        """Broadcast a pre-formed event object (with `type` and `data`) to a session.
+
+        Accepts either:
+          • a dict shaped ``{"type": "...", "data": {...}}``
+          • a dataclass / object exposing ``.type`` and ``.data``
+          • any object with ``__dict__`` that contains a ``type`` field
+
+        Falls back to ``str(event)`` for unknown shapes.
+        """
+        # Try to extract type + data from common shapes
+        ev_type = None
+        ev_data: Any = None
+        if isinstance(event, dict):
+            ev_type = event.get("type")
+            ev_data = event.get("data")
+        else:
+            ev_type = getattr(event, "type", None)
+            ev_data = getattr(event, "data", None)
+            if ev_type is None and hasattr(event, "__dict__"):
+                ev_type = getattr(event, "type", None)
+                ev_data = getattr(event, "data", None)
+
+        if ev_type is None:
+            # Fallback: serialize as-is with a generic type
+            try:
+                message = json.dumps({"type": "raw_event", "data": event})
+            except (TypeError, ValueError):
+                message = json.dumps({"type": "raw_event", "data": str(event)})
+            await self._send_or_buffer(session_id, message, "raw_event")
+            return
+
+        message = json.dumps({"type": ev_type, "data": ev_data or {}})
+        await self._send_or_buffer(session_id, message, ev_type)
+
+    async def _send_or_buffer(self, session_id: str, message: str, event_type: str) -> None:
+        """Low-level helper — try to send immediately or buffer for later."""
         async with self._lock:
             ws = self._connections.get(session_id)
 

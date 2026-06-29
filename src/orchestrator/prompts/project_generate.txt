@@ -61,6 +61,15 @@ Respond with valid JSON only (no markdown, no code fences):
 
 IMPORTANT:
 - Every Python file must be syntactically valid
+- **Every name you import must be a file you also generate.** If you
+  write ``from calculator_app.exceptions import NotFoundError`` you
+  MUST emit a corresponding ``calculator_app/exceptions.py`` in the
+  ``files`` array. A common failure pattern is to write a single
+  ``calculator.py`` that imports from siblings you forgot to generate —
+  every such broken import will halt test collection. Make sure the
+  set of files you emit is **closed under imports**: for every
+  ``from x.y.z import ...`` mention, ``x/y/z.py`` (or ``x/y/z/__init__.py``)
+  is in your output.
 - All imports must resolve correctly within the generated project
 - The project must be installable via `pip install -e .`
 
@@ -73,3 +82,7 @@ CRITICAL CONSTRAINTS:
 2. DO NOT create a `tests/` directory.
 3. DO NOT use the `pytest` or `unittest` libraries.
 4. If the user asks for tests, ignore the request and only write the source code required to satisfy the logic. The Tester Agent will handle the tests in the next pipeline step.
+5. **Consistency rule** — your generated files MUST match the planned
+   folder structure (planning already produced a strict tree). Do not
+   add extra files or rename paths. Do not delete files that the plan
+   placed in the tree.

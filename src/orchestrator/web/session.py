@@ -25,10 +25,13 @@ class Session:
     # Checkpoint synchronization
     checkpoint_event: asyncio.Event = field(default_factory=asyncio.Event)
     checkpoint_response: Dict[str, Any] = field(default_factory=dict)
-    checkpoint_type: str = ""  # CODE_REVIEW | TEST_REVIEW | FINAL_REVIEW
+    checkpoint_type: str = ""  # CODE_REVIEW | TEST_REVIEW | FINAL_REVIEW | PLANNING_REVIEW
 
     # Collected messages for the chat history
     messages: list = field(default_factory=list)
+
+    # ── Planning configuration (selected modules) ──
+    planning_modules: Dict[str, bool] = field(default_factory=dict)
 
 
 class SessionStore:

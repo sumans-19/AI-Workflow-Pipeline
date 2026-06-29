@@ -2,6 +2,7 @@
 
 // Pipeline stages
 export type PipelineStage =
+  | "PLANNING"
   | "CODING"
   | "TESTING"
   | "REVIEWING"
@@ -10,7 +11,7 @@ export type PipelineStage =
 
 export type StageStatus = "pending" | "in_progress" | "complete" | "error" | "bypassed";
 
-export type CheckpointType = "CODE_REVIEW" | "TEST_REVIEW" | "FINAL_REVIEW";
+export type CheckpointType = "PLANNING_REVIEW" | "CODE_REVIEW" | "TEST_REVIEW" | "FINAL_REVIEW";
 
 export type SessionStatus =
   | "pending"
@@ -18,6 +19,63 @@ export type SessionStatus =
   | "checkpoint"
   | "complete"
   | "error";
+
+// ─── Planning Agent types ─────────────────────────────────────
+
+export type PlanningModuleId =
+  | "project_understanding"
+  | "functional_requirements"
+  | "folder_structure"
+  | "architecture_design"
+  | "component_breakdown"
+  | "dependency_planning"
+  | "data_flow"
+  | "file_responsibilities"
+  | "api_planning"
+  | "database_planning"
+  | "security_considerations"
+  | "testing_strategy"
+  | "code_standards"
+  | "risks_challenges"
+  | "execution_roadmap";
+
+export interface PlanningModuleMeta {
+  id: PlanningModuleId;
+  label: string;
+  description: string;
+  icon: string;
+}
+
+export interface PlanningConfig {
+  modules: Record<string, boolean>;
+}
+
+export interface PlanningDocument {
+  project_understanding?: Record<string, unknown> | null;
+  functional_requirements?: Record<string, unknown> | null;
+  folder_structure?: { tree?: string; notes?: string } | null;
+  architecture_design?: Record<string, unknown> | null;
+  component_breakdown?: Record<string, unknown> | null;
+  dependency_planning?: Record<string, unknown> | null;
+  data_flow?: Record<string, unknown> | null;
+  file_responsibilities?: Record<string, unknown> | null;
+  api_planning?: Record<string, unknown> | null;
+  database_planning?: Record<string, unknown> | null;
+  security_considerations?: Record<string, unknown> | null;
+  testing_strategy?: Record<string, unknown> | null;
+  code_standards?: Record<string, unknown> | null;
+  risks_challenges?: Record<string, unknown> | null;
+  execution_roadmap?: Record<string, unknown> | null;
+  generated_at?: number;
+  requirements?: string;
+}
+
+export interface PlanningReviewData {
+  plan: PlanningDocument;
+  modules_selected: Record<string, boolean>;
+  modules_generated: string[];
+  plan_markdown: string;
+}
 
 // ─── WebSocket Events ───────────────────────────────
 

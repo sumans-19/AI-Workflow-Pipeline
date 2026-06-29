@@ -1,7 +1,7 @@
 import ast
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Set, Tuple
 import json
 
 from ..agents.base import BaseAgent
@@ -59,51 +59,100 @@ class TesterAgent(BaseAgent):
                 context.success = True
                 return context
 
-            total_files = len(python_sources)
-            for idx, (filename, code) in enumerate(python_sources.items(), 1):
-                base_name = Path(filename).stem
-                test_filename = (Path("tests") / f"test_{base_name}.py").as_posix()
-                
+            # ── Resolve the test plan from the approved folder_structure ──
+            test_root = self._resolve_test_root(context)
+            planned_test_paths = self._planned_test_paths(context, test_root)
+
+            # Build a work list. If the plan specifies test files, drive
+            # off those (each one gets mapped back to a source file).
+            # Otherwise fall back to "derive one test per source file".
+            work_items: List[tuple] = []   # (test_path, source_path or None)
+            seen_test_paths: Set[str] = set()
+
+            if planned_test_paths:
+                # The plan has explicit test files — respect them.
+                for tpath in planned_test_paths:
+                    seen_test_paths.add(tpath)
+                    if Path(tpath).name in {"__init__.py", "conftest.py"}:
+                        # conftest.py / package init — handled separately.
+                        work_items.append((tpath, None))
+                        continue
+                    src = _match_source_for_test(tpath, python_sources, test_root)
+                    work_items.append((tpath, src))
+            else:
+                # No plan → fall back to one test per source file.
+                for src_path in python_sources:
+                    mirror = _mirror_subpath_under_test_root(src_path, test_root)
+                    if mirror == "__test_placeholder__":
+                        continue
+                    tpath = (Path(test_root) / mirror).as_posix()
+                    if tpath not in seen_test_paths:
+                        seen_test_paths.add(tpath)
+                        work_items.append((tpath, src_path))
+
+            # Add any source file not covered by the planned tests.
+            for src_path in python_sources:
+                already_covered = any(
+                    Path(w[0]).stem.replace("test_", "", 1) == Path(src_path).stem
+                    for w in work_items
+                    if w[1] is not None
+                )
+                if already_covered:
+                    continue
+                mirror = _mirror_subpath_under_test_root(src_path, test_root)
+                if mirror == "__test_placeholder__":
+                    continue
+                tpath = (Path(test_root) / mirror).as_posix()
+                if tpath not in seen_test_paths:
+                    seen_test_paths.add(tpath)
+                    work_items.append((tpath, src_path))
+
+            if not work_items:
+                logger.warning("%s found no test work items.", self.name)
+                if context.emit_event:
+                    context.emit_event("agent_completed", {"agent": "tester", "message": "No tests to generate", "passed": True})
+                context.success = True
+                return context
+
+            # ── Generate each test file ───────────────────────────────
+            total = len(work_items)
+            for idx, (test_filename, src_path) in enumerate(work_items, 1):
                 if context.emit_event:
                     context.emit_event("agent_progress", {
                         "agent": "tester",
-                        "progress": int((idx / total_files) * 50),
-                        "message": f"Generating {test_filename}..."
+                        "progress": int((idx / max(total, 1)) * 50),
+                        "message": f"Generating {test_filename}...",
                     })
 
-                test_code = self._generate_tests(code, filename)
-                
-                # Pre-Execution Validation (Self-Correction)
-                if context.emit_event:
-                    context.emit_event("agent_progress", {
-                        "agent": "tester",
-                        "progress": int((idx / total_files) * 50) + 5,
-                        "message": f"Validating tests for {filename}..."
-                    })
-                
-                test_code = self._validate_and_repair_test(code, filename, test_code, test_filename)
-                # Place tests in a top-level tests/ directory, not alongside source
-                path = self.file_manager.write_file(test_filename, test_code, directory=context.workspace_path)
-                logger.info("%s generated test file: %s", self.name, path)
+                # conftest.py or __init__.py — generate a small stub.
+                base = Path(test_filename).name
+                if base == "__init__.py":
+                    self._emit_test_file(test_filename, "", context)
+                    continue
+                if base == "conftest.py":
+                    stub = self._generate_conftest(test_root, list(python_sources.keys()))
+                    self._emit_test_file(test_filename, stub, context)
+                    continue
 
-                context.test_code[test_filename] = test_code
-                context.emitted_files.add(test_filename)
-                if context.emit_event:
-                    context.emit_event("file_created", {
-                        "path": test_filename,
-                        "content": test_code,
-                        "language": "python",
-                    })
-                else:
-                    from ..cli.console import display_code
-                    display_code(test_filename, test_code)
+                # Regular test_*.py file — generate against the source.
+                if src_path and src_path in python_sources:
+                    code = python_sources[src_path]
+                elif src_path is None:
+                    # Couldn't resolve a source — pick the source with the
+                    # closest package name.
+                    code = self._best_effort_source_for_test(test_filename, python_sources)
 
+                test_code = self._generate_tests(code, src_path or test_filename)
+                test_code = self._validate_and_repair_test(
+                    code, src_path or test_filename, test_code, test_filename
+                )
+                self._emit_test_file(test_filename, test_code, context)
             logger.info("%s running pytest...", self.name)
             if context.emit_event:
                 context.emit_event("agent_progress", {
                     "agent": "tester",
                     "progress": 75,
-                    "message": "Running pytest..."
+                    "message": "Running pytest...",
                 })
 
             result = self.runner.run_pytest(
@@ -116,6 +165,48 @@ class TesterAgent(BaseAgent):
             report_data = result.get("report_data", {})
             execution_mode = result["execution_mode"]
             is_env_error = execution_mode == "local_env_error" or result.get("env_error", False)
+
+            # ── Auto-fix loop: detect ImportError and patch missing modules ─
+            # If the Coder wrote code that imports from a module that doesn't
+            # exist (e.g. ``from calculator_app.exceptions import ...`` when
+            # ``exceptions.py`` was never created), generate a minimal stub
+            # for each missing module and re-run pytest. This keeps the
+            # majority/all-pass invariant working even when the Coder forgets
+            # to write one of the files it imports.
+            for repair_attempt in range(3):
+                missing_modules = self._collect_missing_modules(output, context)
+                if not missing_modules:
+                    break
+                logger.warning(
+                    "%s: detected %d missing module(s) from ImportErrors: %s — "
+                    "generating stubs (attempt %d/3)",
+                    self.name, len(missing_modules),
+                    ", ".join(missing_modules), repair_attempt + 1,
+                )
+                if context.emit_event:
+                    context.emit_event("agent_progress", {
+                        "agent": "tester",
+                        "progress": 70,
+                        "message": (
+                            f"Auto-generating {len(missing_modules)} missing module(s)… "
+                            f"({', '.join(missing_modules[:3])}…)"
+                        ),
+                    })
+                self._stub_missing_modules(missing_modules, context)
+                # Re-run pytest so the next iteration sees the stubs.
+                result = self.runner.run_pytest(
+                    context.workspace_path,
+                    force_local=(context.test_execution_mode == "local")
+                )
+                raw_success = result["passed"]
+                output = result["output"]
+                coverage = result["coverage_line"]
+                report_data = result.get("report_data", {})
+                execution_mode = result["execution_mode"]
+                is_env_error = execution_mode == "local_env_error" or result.get("env_error", False)
+                if raw_success:
+                    logger.info("%s: auto-repair succeeded on attempt %d", self.name, repair_attempt + 1)
+                    break
 
             # ── Pass-rate calculation ──
             # If the majority of tests pass, treat the run as PASSED even when
@@ -206,7 +297,12 @@ class TesterAgent(BaseAgent):
                 }
 
             context.current_step = "TESTS_EXECUTED"
-            context.success = True
+            # Reflect the EFFECTIVE outcome (raw OR majority_passed) in
+            # context.success so the orchestrator's downstream gating
+            # agrees with the sidebar's TESTING card and the ReviewPanel.
+            # Previously this was hard-coded to True which masked failures
+            # when the orchestration continued past a 0%-pass run.
+            context.success = bool(success)
 
             if context.emit_event:
                 context.emit_event("agent_completed", {
@@ -226,6 +322,259 @@ class TesterAgent(BaseAgent):
             if context.emit_event:
                 context.emit_event("agent_failed", {"agent": "tester", "reason": str(e)})
             return context
+
+    @staticmethod
+    def _planned_test_paths(context, test_root: str) -> List[str]:
+        """Return the explicit list of test file paths from the approved tree.
+
+        Drops directory entries and ``__init__.py`` markers. Conftest and
+        regular test files are all kept (the caller handles them differently).
+        Only ``.py`` files are honoured — non-Python planned test paths
+        (``.js``, ``.ts``) are silently skipped per the Python-only policy.
+        """
+        plan = getattr(context, "plan", None)
+        if not plan or not getattr(plan, "plan_approved", False):
+            return []
+        try:
+            # planned_test_files() already filters to *.py + test paths
+            # (and warns about anything non-Python it finds), so we can
+            # rely on it directly here.
+            from .planning_models import FolderStructure as _FS
+            fs = getattr(plan, "folder_structure", None)
+            if not fs or not getattr(fs, "tree", None):
+                return []
+            out: list = []
+            for p in _FS(tree=fs.tree).planned_test_files():
+                if Path(p).name == "__init__.py":
+                    continue
+                if Path(p).suffix == ".py":
+                    out.append(p)
+            return out
+        except Exception:
+            return []  
+
+    def _emit_test_file(self, test_filename: str, test_code: str, context) -> None:
+        """Persist a generated test file and emit it as a ``file_created`` event.
+
+        Defensive guard: refuses to write anything that isn't a ``.py`` file.
+        The project is Python-only, so a non-``.py`` path here is always a
+        bug (e.g. the LLM slipped us a ``tests/foo.js`` even though the
+        planned tree said Python only).
+        """
+        # Allow standard packaging files (pyproject.toml etc.) to exist in
+        # the planned tree, but tests are ALWAYS ``.py``.
+        if Path(test_filename).suffix != ".py":
+            # conftest.py / __init__.py are also ``.py`` (already covered).
+            logger.warning(
+                "Tester: refusing to write non-Python test file %r — Python only.",
+                test_filename,
+            )
+            return
+        path = self.file_manager.write_file(test_filename, test_code, directory=context.workspace_path)
+        logger.info("%s generated test file: %s", self.name, path)
+        context.test_code[test_filename] = test_code
+        context.emitted_files.add(test_filename)
+        if context.emit_event:
+            context.emit_event("file_created", {
+                "path": test_filename,
+                "content": test_code,
+                "language": "python",
+            })
+
+    def _generate_conftest(self, test_root: str, source_paths: List[str]) -> str:
+        """Generate a sensible ``conftest.py`` for the planned test root."""
+        # Build a sys.path tweak so pytest finds the inner package(s).
+        inserts = sorted({str(Path(p).parents[len(Path(p).parents) - 2])
+                          for p in source_paths
+                          if len(Path(p).parents) >= 2 and p != "."})
+        syspath_lines = "\n".join(
+            f"sys.path.insert(0, {json.dumps(d)})" for d in inserts
+        ) if inserts else ""
+
+        return f'''"""Auto-generated conftest.py for {test_root}/.
+
+Adds the inner package directory to ``sys.path`` so ``pytest`` can
+import the modules under test without an editable install.
+"""
+import json
+import sys
+from pathlib import Path
+
+# Make sure pytest discovers the project's inner packages even when it
+# is invoked from a different working directory.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+{syspath_lines}
+
+
+@pytest.fixture(scope="session")
+def project_root():
+    """Absolute path to the project root (parent of the tests/ directory)."""
+    return _PROJECT_ROOT
+'''
+
+    def _best_effort_source_for_test(
+        self, test_filename: str, python_sources: dict
+    ) -> Tuple[str, str]:
+        """Return ``(source_path, source_code)`` best matching a test path.
+
+        Used when the test path was explicitly planned but we couldn't
+        map it back to a real source file. Picks the source with the
+        longest shared package name.
+        """
+        from pathlib import Path as _P
+        test_stem = _P(test_filename).stem.replace("test_", "", 1)
+        if not test_stem:
+            test_stem = _P(test_filename).stem
+        best, best_score = None, -1
+        for sp in python_sources.keys():
+            score = 0
+            if _P(sp).stem == test_stem:
+                score += 5
+            if test_stem in sp:
+                score += 2
+            for part in _P(sp).parts[:-1]:
+                if part and part in test_filename:
+                    score += 1
+            if score > best_score:
+                best, best_score = sp, score
+        if best is None and python_sources:
+            best = next(iter(python_sources))
+        return best, python_sources.get(best, "")
+
+    @staticmethod
+    def _collect_missing_modules(pytest_output: str, context) -> list:
+        """Extract dotted module names that triggered ImportError.
+
+        Looks for patterns like:
+            ``ModuleNotFoundError: No module named 'calculator_app.exceptions'``
+            ``from calculator_app.exceptions import (``
+
+        Returns a deduplicated list of fully-qualified module names that
+        were imported by some test/source file but don't have a matching
+        ``.py`` file in the workspace.
+        """
+        import re as _re
+        missing: list = []
+        seen: set = set()
+        # Strip very long output to keep regex fast.
+        tail = pytest_output[-8000:] if pytest_output else ""
+
+        # 1. ModuleNotFoundError: No module named 'foo.bar.baz'
+        for m in _re.finditer(
+            r"ModuleNotFoundError:\s*No module named ['\"]([^'\"]+)['\"]",
+            tail,
+        ):
+            mod = m.group(1)
+            if mod not in seen:
+                seen.add(mod)
+                missing.append(mod)
+
+        # 2. ``from x.y.z import ...`` lines whose x.y.z package is
+        # imported from a test file that errored at collection.
+        for m in _re.finditer(
+            r"(?:from|import)\s+([a-zA-Z_][\w.]*)\s*(?:$|\(|import)",
+            tail,
+        ):
+            mod = m.group(1)
+            if mod.startswith(("pytest", "unittest", "_pytest", "pluggy")):
+                continue
+            if mod in seen:
+                continue
+            seen.add(mod)
+            missing.append(mod)
+
+        # Discard anything that already exists as a real file on disk.
+        ws = Path(context.workspace_path)
+        existing = {
+            ".".join(p.relative_to(ws).with_suffix("").parts)
+            for p in ws.rglob("*.py")
+            if p.name != "__init__.py"
+        }
+        # Also include directory packages.
+        for p in ws.rglob("__init__.py"):
+            rel = p.relative_to(ws).parent
+            existing.add(".".join(rel.parts))
+
+        # Only keep modules that are children of the project (not stdlib).
+        # A typical missing module looks like ``calculator_app.exceptions``
+        # which, if it lived at ``calculator_app/exceptions.py``, would be in
+        # ``existing``.
+        filtered: list = []
+        for mod in missing:
+            top = mod.split(".")[0]
+            if top not in existing and "." not in mod:
+                continue  # looks like a third-party package, leave it
+            if mod in existing:
+                continue  # actually exists, ImportError must be something else
+            filtered.append(mod)
+        return filtered
+
+    @staticmethod
+    def _stub_missing_modules(missing: list, context) -> None:
+        """Generate minimal Python stub files for every missing module.
+
+        Where they go:
+          * If the dotted name already has a directory prefix that's in the
+            workspace (e.g. ``calculator_app``), the stub goes inside that
+            directory.
+          * Otherwise the stub goes to ``<workspace>/<module>.py``.
+
+        Stubs are emitted as ``file_created`` events so the FileTree
+        reflects them immediately.
+        """
+        from .planning_models import is_test_path
+        ws = Path(context.workspace_path)
+        for mod in missing:
+            parts = mod.split(".")
+            target = ws.joinpath(*parts).with_suffix(".py")
+            # Don't clobber tests or pre-existing files.
+            if target.exists() or is_test_path(str(target)):
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            stub = (
+                f'"""Auto-generated stub for missing module `{mod}`.\n\n'
+                f"This file was synthesised by the Tester Agent because the\n"
+                f"Coder wrote `import {mod}` without producing a matching\n"
+                f"``{parts[-1]}.py``. Replace its body with a real\n"
+                f"implementation on the next Auto-Fix iteration.\n"
+                f'"""\n\n'
+                f"__all__ = []\n"
+            )
+            target.write_text(stub, encoding="utf-8")
+            logger.info("Tester: stubbed missing module %s at %s", mod, target)
+            # Update context so subsequent runs see it.
+            rel = str(target.relative_to(ws))
+            context.source_code[rel] = stub
+            context.emitted_files.add(rel)
+            if context.emit_event:
+                context.emit_event("file_created", {
+                    "path": rel,
+                    "content": stub,
+                    "language": "python",
+                })
+
+    @staticmethod
+    def _resolve_test_root(context) -> str:
+        """Pick the directory where tests should live.
+
+        Priority:
+          1. If the approved plan has a ``folder_structure`` module, parse
+             the planned tree and pick the first directory whose name starts
+             with ``test`` (e.g. ``tests``, ``tests/unit``).
+          2. Otherwise fall back to a top-level ``tests/`` directory.
+        """
+        plan = getattr(context, "plan", None)
+        if plan and getattr(plan, "plan_approved", False):
+            try:
+                from .planning_models import FolderStructure as _FS
+                fs = getattr(plan, "folder_structure", None)
+                if fs and getattr(fs, "tree", None):
+                    root = _FS(tree=fs.tree).test_root()
+                    if root:
+                        return root.rstrip("/")
+            except Exception:
+                pass
+        return "tests"
 
     def _generate_tests(self, source_code: str, source_filename: str) -> str:
         # 1. Pre-Analysis
@@ -252,8 +601,13 @@ class TesterAgent(BaseAgent):
             "4. Return ONLY valid Python code."
         )
         
-        test_filename = (Path("tests") / f"test_{Path(source_filename).stem}.py").as_posix()
-        
+        # Compute the test filename from the planned test root so the
+        # generated tests live where the folder_structure planned them to.
+        mirror = _mirror_subpath_under_test_root(source_filename, "tests")
+        if mirror == "__test_placeholder__":
+            return ""  # Caller already filters __init__.py
+        test_filename = (Path("tests") / mirror).as_posix()
+
         user_prompt = (
             f"Source File Path: `{source_filename}`\n"
             f"Test File Path: `{test_filename}`\n\n"
@@ -467,3 +821,122 @@ class TesterAgent(BaseAgent):
         except Exception as e:
             logger.warning("Failed to analyze test failures: %s", e)
             return {"rca": [], "recommended_action": "Check raw logs for details."}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Module-level helper used by TesterAgent.execute
+# ─────────────────────────────────────────────────────────────────────
+
+def _mirror_subpath_under_test_root(source_filename: str, test_root: str) -> str:
+    """Return the test-file path that mirrors ``source_filename`` under ``test_root``.
+
+    Strategy: keep only the Python package directory right before the
+    file (plus any sub-package directories) and the file's stem. Common
+    wrapper segments like ``src`` are stripped so the mirrored test path
+    stays short and matches Python convention.
+
+    Examples (test_root="tests"):
+        src/calculator/core.py           → test_calculator_core.py
+        src/calculator/__init__.py       → __test_placeholder__  (skipped upstream)
+        calculator/core.py               → test_core.py
+        src/calculator/services/api.py   → test_calculator_services_api.py
+        calculator/src/calculator/core.py→ test_calculator_core.py  (root + wrapper stripped)
+    """
+    from pathlib import Path as _P
+    src = _P(source_filename)
+    if src.name == "__init__.py":
+        return "__test_placeholder__"
+
+    # Handle the common `projectname/src/projectname/...` layout by
+    # stripping the duplicate root + wrapper.
+    parts = list(src.parts)
+    if len(parts) >= 3 and parts[0] == parts[2] and parts[1] in {"src", "lib"}:
+        parts = parts[2:]
+
+    # Drop common wrapper segments that aren't part of the package name.
+    wrappers = {"src", "lib", "pkg", "app", "source", test_root}
+    relevant = [p for p in parts[:-1] if p not in wrappers and p != "."]
+    # De-duplicate consecutive identical segments (defensive).
+    deduped: list = []
+    for p in relevant:
+        if not deduped or deduped[-1] != p:
+            deduped.append(p)
+
+    stem = src.stem
+    if deduped:
+        prefix = "_".join(deduped)
+        return f"test_{prefix}_{stem}.py"
+    return f"test_{stem}.py"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Module-level helper used by TesterAgent.execute
+# ─────────────────────────────────────────────────────────────────────
+
+def _match_source_for_test(test_filename: str, python_sources: dict, test_root: str) -> Optional[str]:
+    """Return the source-file path that a planned test file should cover.
+
+    Strategy (most specific first):
+      1. Exact package+module reverse mapping (e.g. ``tests/calculator/test_core.py``
+         → ``src/calculator/core.py``).
+      2. Stem-matching within the planned test root (with package prefix
+         inferred from the path).
+      3. Bare stem match (e.g. ``test_cli.py`` → ``cli.py``) — used when
+         nothing more specific is available.
+
+    Returns ``None`` if no plausible source file can be found (caller
+    will fall back to ``_best_effort_source_for_test``).
+    """
+    from pathlib import Path as _P
+    test_path = _P(test_filename)
+    test_stem = test_path.stem
+    # Strip leading "test_" to get the candidate source stem.
+    src_stem = test_stem[len("test_"):] if test_stem.startswith("test_") else test_stem
+
+    # Make test_root absolute (so Path.parts behave predictably)
+    test_root_path = _P(test_root)
+    if test_root_path.is_absolute():
+        try:
+            rel = test_path.relative_to(test_root_path)
+            test_parts = list(rel.parts)
+        except ValueError:
+            test_parts = list(test_path.parts)
+    else:
+        try:
+            rel = test_path.relative_to(test_root_path)
+            test_parts = list(rel.parts)
+        except ValueError:
+            test_parts = list(test_path.parts)
+
+    # ── 1. Mirror-matched with package folders ──────────────────────
+    # If the planned test is at ``<test_root>/<pkg>/test_<name>.py`` we
+    # prefer the source at ``src/<pkg>/<name>.py`` or ``<pkg>/<name>.py``.
+    mirror_candidates: List[str] = []
+    if len(test_parts) >= 2:
+        # Drop the trailing test_<name>.py and treat the rest as a package path.
+        pkg_parts = test_parts[:-1]
+        # Common Python wrapper directories we'll try inserting.
+        for prefix in ["src", "lib", "pkg", "app", ""]:
+            cand_parts = ([prefix] if prefix else []) + pkg_parts + [src_stem + ".py"]
+            cand = "/".join(p for p in cand_parts if p)
+            mirror_candidates.append(cand)
+
+    for cand in mirror_candidates:
+        if cand in python_sources:
+            return cand
+        # Allow ``.py`` ↔ ``/__init__.py`` not (we want real source).
+        for sp in python_sources:
+            if sp == cand:
+                return cand
+
+    # ── 2. Stem match across source files ──────────────────────────
+    for sp in python_sources:
+        if _P(sp).stem == src_stem:
+            return sp
+
+    # ── 3. Substring match (last resort) ───────────────────────────
+    for sp in python_sources:
+        if src_stem in sp:
+            return sp
+
+    return None

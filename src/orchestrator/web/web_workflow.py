@@ -5,11 +5,15 @@ events so the React frontend can drive checkpoints.
 """
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
 from ..agents.coder import CoderAgent
+from ..agents.planning_agent import PlanningAgent
+from ..agents.planning_models import PlanningDocument
+from ..agents.planning_workflow import run_planning_stage
 from ..agents.tester import TesterAgent
 from ..agents.reviewer import ReviewerAgent
 from ..agents.validator import ValidatorAgent
@@ -24,6 +28,11 @@ from .session import Session
 from .ws_manager import manager as ws
 
 
+# Modes that should run the Planning Agent before the Coder.
+# VALIDATE audits existing code → skip planning.
+_PLANNING_MODES = {"GENERATE", "PROJECT", "HYBRID"}
+
+
 class WebWorkflowOrchestrator:
     """Runs the same agent pipeline as the CLI but communicates via WebSocket."""
 
@@ -31,6 +40,7 @@ class WebWorkflowOrchestrator:
         budget = settings.LLM_BUDGET_LIMIT_USD or None
         self.cost_tracker = CostTracker(budget_limit_usd=budget)
         llm = create_llm_client(cost_tracker=self.cost_tracker)
+        self.planner = PlanningAgent(llm=llm)
         self.coder = CoderAgent(llm=llm)
         self.tester = TesterAgent(llm=llm)
         self.reviewer = ReviewerAgent(llm=llm)
@@ -55,6 +65,8 @@ class WebWorkflowOrchestrator:
             is_project_mode=session.is_project_mode,
             test_execution_mode=session.test_execution_mode
         )
+        # Carry the user's planning module selection into the workflow context.
+        context.planning_modules = dict(session.planning_modules or {})
         session.context = context
         session.status = "running"
 
@@ -91,6 +103,99 @@ class WebWorkflowOrchestrator:
         context.emit_event = threadsafe_emit
 
         try:
+            # ── 0. PLANNING AGENT (only when creating something new) ────────
+            run_planning = (
+                context.mode in _PLANNING_MODES
+                and any(context.planning_modules.values())
+            )
+
+            while run_planning and not context.plan_approved:
+                # Run the extracted planning workflow
+                await run_planning_stage(context, ws, sid)
+
+                if not context.success:
+                    await ws.emit(sid, "pipeline_complete", {
+                        "status": "error",
+                        "message": context.error_message or "Planning Agent failed",
+                    })
+                    session.status = "error"
+                    return context
+
+                # ── 0.5 PERSIST PLAN + EMIT FILES TO WORKSPACE ─────
+                # Write the plan to the workspace (visible in FileTree) AND
+                # to the artifacts directory (audit log) BEFORE asking the
+                # user to review, so they can browse the generated files
+                # alongside the review panel.
+                plan_dict = context.plan.to_dict() if context.plan else {}
+                await self._persist_plan(sid, context, plan_dict)
+
+                # ── 0.6 PLANNING REVIEW CHECKPOINT ────────────────
+                # The ws event is emitted by run_planning_stage, but we still need to wait for user input
+                # using the orchestrator's checkpoint mechanism.
+                plan_action = await self._checkpoint(
+                    session,
+                    checkpoint_type="planning_review",
+                    message="Review the generated implementation plan. Approve to continue to Coding, Edit to modify, or Regenerate to redo.",
+                    data={
+                        "plan": plan_dict,
+                        "modules_selected": context.planning_modules,
+                        "modules_generated": context.plan.selected_module_ids() if context.plan else [],
+                        "plan_markdown": context.plan.to_markdown() if context.plan else "",
+                    }
+                )
+                logger.info("planning_review action=%s session=%s", plan_action, sid)
+
+                if plan_action == "reject":
+                    session.status = "complete"
+                    context.success = False
+                    context.error_message = "User rejected the implementation plan."
+                    await ws.emit(sid, "pipeline_complete", {
+                        "status": "error",
+                        "message": context.error_message,
+                    })
+                    return context
+
+                if plan_action == "regenerate_plan":
+                    await ws.emit(sid, "log", {
+                        "message": "🔄 Regenerating plan with the same module selection…"
+                    })
+                    # Reset plan so the planner runs again in the next iteration
+                    context.plan = None
+                    context.plan_approved = False
+                    # Don't increment retry_count — this is a planning regeneration, not a code retry.
+                    # We re-run the planning stage by falling through.
+                    continue
+
+                if plan_action == "edit_plan":
+                    edited_markdown = (session.checkpoint_response.get("feedback") or "").strip()
+                    if edited_markdown:
+                        try:
+                            context.plan = self._apply_edited_plan(
+                                context.plan, edited_markdown
+                            )
+                            # Re-persist the edited plan to workspace + artifacts
+                            new_plan_dict = context.plan.to_dict() if context.plan else {}
+                            await self._persist_plan(sid, context, new_plan_dict)
+                            plan_dict = new_plan_dict
+                        except Exception as exc:
+                            logger.warning("Failed to apply edited plan: %s", exc)
+                            await ws.emit(sid, "log", {
+                                "message": f"⚠ Could not parse edits ({exc}); keeping original plan."
+                            })
+
+                # Approve (default): mark as approved
+                context.plan_approved = True
+
+                await ws.emit(sid, "log", {
+                    "message": f"✓ Plan approved ({len(context.plan.selected_module_ids())} modules). Continuing to Coding…",
+                })
+
+                await ws.emit(sid, "stage_update", {
+                    "stage": "PLANNING",
+                    "status": "complete",
+                    "message": f"Plan approved ({len(context.plan.selected_module_ids())} modules). Continuing to Coding…",
+                })
+
             while context.retry_count <= context.max_retries:
                 # ── A. CODER AGENT ──────────────────────────────
                 await ws.emit(sid, "stage_update", {
@@ -215,11 +320,19 @@ class WebWorkflowOrchestrator:
                 summary = (context.test_results.get("report_data", {}) or {}).get("summary", {}) or {}
                 failed_count = int(summary.get("failed", 0) or 0)
 
+                # Treat the run as effective-pass when EITHER:
+                #   • pytest reported passed, OR
+                #   • the majority-pass rule kicked in (≥70% pass_rate)
+                # This keeps the sidebar TESTING card in lock-step with the
+                # right-panel TEST RESULTS card (which already honours
+                # majority_passed via `isMajority = majority_passed || passed`).
+                effective_pass = bool(test_passed) or bool(test_majority)
+
                 if test_passed and failed_count == 0:
                     stage_status = "complete"
                     stage_message = "All tests passed ✓. Waiting for user confirmation to proceed to Reviewer."
                     checkpoint_message = "All tests passed. Choose how to continue:"
-                elif test_passed:
+                elif effective_pass:
                     stage_status = "complete"
                     stage_message = (
                         f"Tests mostly passed ({test_pass_rate*100:.1f}%, "
@@ -520,6 +633,91 @@ class WebWorkflowOrchestrator:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_edited_plan(
+        plan: Optional[PlanningDocument],
+        edited_markdown: str,
+    ) -> PlanningDocument:
+        """Apply a user-edited markdown plan back into the structured doc.
+
+        Since parsing the free-form markdown back into the original dataclasses
+        is brittle, we keep the original structured plan but update the
+        `requirements` field to the edited text so the Coder sees the latest
+        user intent. The Coder uses the markdown rendering as a fallback
+        summary anyway.
+        """
+        if plan is None:
+            plan = PlanningDocument(requirements=edited_markdown)
+        else:
+            plan.requirements = f"{plan.requirements}\n\n--- USER EDITS ---\n{edited_markdown}"
+        return plan
+
+    async def _persist_plan(self, sid: str, context: WorkflowContext, plan_dict: Dict[str, Any]) -> None:
+        """Persist the generated plan to BOTH the workspace (visible in the
+        FileTree explorer) and the artifacts directory (audit log).
+
+        Emits a ``file_created`` event for every generated file so the
+        React frontend populates the file tree automatically. Also emits a
+        markdown summary (``plan.md``) so the plan can be opened with one
+        click in the Code preview.
+        """
+        if not plan_dict:
+            return
+
+        # Use a project subfolder inside the workspace so planning files
+        # don't get mixed with future Coder-generated source code.
+        planning_dir_name = "Planning"
+        workspace_planning_dir = Path(context.workspace_path) / planning_dir_name
+        artifacts_planning_dir = Path(context.artifacts_path) / planning_dir_name
+        workspace_planning_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_planning_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── 1. plan.json — machine-readable dump of every module ──
+        plan_json_rel = f"{planning_dir_name}/plan.json"
+        plan_json_text = json.dumps(plan_dict, indent=2, default=str)
+        (workspace_planning_dir / "plan.json").write_text(plan_json_text, encoding="utf-8")
+        (artifacts_planning_dir / "plan.json").write_text(plan_json_text, encoding="utf-8")
+        await self._emit_plan_file(sid, plan_json_rel, plan_json_text, "json")
+
+        # ── 2. plan.md — human-readable summary ──
+        plan_md_text = context.plan.to_markdown() if context.plan else json.dumps(plan_dict, indent=2)
+        plan_md_rel = f"{planning_dir_name}/plan.md"
+        (workspace_planning_dir / "plan.md").write_text(plan_md_text, encoding="utf-8")
+        (artifacts_planning_dir / "plan.md").write_text(plan_md_text, encoding="utf-8")
+        await self._emit_plan_file(sid, plan_md_rel, plan_md_text, "markdown")
+
+        # ── 3. One file per generated module ──
+        from ..agents.planning_models import PLANNING_MODULES as _PLANNING_MODULES
+        module_label = {m["id"]: m["label"] for m in _PLANNING_MODULES}
+        for module_id, content in plan_dict.items():
+            if not content or module_id in ("generated_at", "requirements"):
+                continue
+            rel_path = f"{planning_dir_name}/{module_id}.txt"
+            if isinstance(content, str):
+                # Add a human-readable header so each file reads well on its own
+                header = f"# {module_label.get(module_id, module_id.replace('_', ' ').title())}\n\n"
+                file_body = header + content
+            else:
+                file_body = json.dumps(content, indent=2, default=str)
+            (workspace_planning_dir / f"{module_id}.txt").write_text(file_body, encoding="utf-8")
+            (artifacts_planning_dir / f"{module_id}.txt").write_text(file_body, encoding="utf-8")
+            await self._emit_plan_file(sid, rel_path, file_body, "text")
+
+        await ws.emit(sid, "log", {
+            "message": f"📝 Plan written to {planning_dir_name}/ ({len(plan_dict)} module(s) + plan.json + plan.md).",
+        })
+
+    async def _emit_plan_file(self, sid: str, path: str, content: str, language: str) -> None:
+        """Emit a file_created event for a generated planning file."""
+        try:
+            await ws.emit(sid, "file_created", {
+                "path": path,
+                "content": content,
+                "language": language,
+            })
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to emit plan file %s: %s", path, exc)
 
     def _persist_source(self, context: WorkflowContext) -> None:
         """Write source files to workspace (runs in thread)."""

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import { PanelRightOpen, PanelLeftOpen } from 'lucide-react'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useSessionStore } from './store/sessionStore'
+import { useSession } from './hooks/useSession'
 
 import TopNav      from './components/layout/TopNav'
 import FileTree    from './components/explorer/FileTree'
@@ -9,6 +10,8 @@ import ChatWindow  from './components/chat/ChatWindow'
 import PromptInput from './components/chat/PromptInput'
 import CodePreview from './components/code/CodePreview'
 import ReviewPanel from './components/review/ReviewPanel'
+import PlanningConfiguration from './components/planning/PlanningConfiguration'
+import PlanningReview from './components/planning/PlanningReview'
 
 type CenterTab = 'chat' | 'code' | 'preview'
 
@@ -27,6 +30,12 @@ export default function App() {
   const reviewOpen     = useSessionStore(s => s.reviewOpen)
   const toggleReview   = useSessionStore(s => s.toggleReview)
   const toggleExplorer = useSessionStore(s => s.toggleExplorer)
+  const status         = useSessionStore(s => s.status)
+  const planningMode   = useSessionStore(s => s.planningMode)
+  const planningDoc    = useSessionStore(s => s.planningDocument)
+
+  // We bring in createSession so we can start the pipeline from the PlanningConfiguration screen
+  const { createSession } = useSession()
 
   // Drag state
   const dragging    = useRef<'explorer' | 'review' | null>(null)
@@ -112,15 +121,42 @@ export default function App() {
         >
           {/* Content area */}
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            {centerTab === 'chat' ? (
-              <>
-                <ChatWindow />
-                <PromptInput />
-              </>
-            ) : centerTab === 'code' ? (
-              <CodePreview />
-            ) : (
-              <PreviewPlaceholder />
+            {/* Planning configuration overlay — shown while user is choosing modules */}
+            {planningMode === 'config' && status === 'pending' && (
+              <div style={{
+                flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+                background: 'var(--bg-base)',
+              }}>
+                <PlanningConfiguration onSubmit={(composedPrompt: string, projectTitle?: string) => {
+                  createSession(composedPrompt, projectTitle)
+                }} />
+              </div>
+            )}
+
+            {/* Planning review overlay — shown when the planner produces a plan */}
+            {planningMode === 'review' && planningDoc && (
+              <div style={{
+                flex: 1, overflow: 'auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+                padding: '24px 16px',
+              }}>
+                <PlanningReview
+                  plan={planningDoc}
+                  planMarkdown={(useSessionStore.getState().activeCheckpoint?.data as any)?.plan_markdown ?? ''}
+                />
+              </div>
+            )}
+
+            {planningMode !== 'config' && planningMode !== 'review' && (
+              centerTab === 'chat' ? (
+                <>
+                  <ChatWindow />
+                  <PromptInput />
+                </>
+              ) : centerTab === 'code' ? (
+                <CodePreview />
+              ) : (
+                <PreviewPlaceholder />
+              )
             )}
           </div>
         </main>

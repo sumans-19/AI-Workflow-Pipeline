@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
 import time
 import uuid
+
+from ..agents.planning_models import PlanningDocument
 
 
 @dataclass
@@ -85,6 +87,13 @@ class WorkflowContext:
     artifacts: Dict[str, Any] = field(default_factory=dict)
     quality_gates: Dict[str, Any] = field(default_factory=dict)
     attempts_by_stage: Dict[str, int] = field(default_factory=dict)
+
+    # ── Planning (populated by the Planning Agent before the Coder runs) ──
+    # When `plan_approved` is True the Coder Agent must consume `plan`
+    # (especially the folder_structure) as the implementation contract.
+    plan: Optional[PlanningDocument] = None
+    plan_approved: bool = False
+    planning_modules: Dict[str, bool] = field(default_factory=dict)
 
     # Callback for emitting structured agent events (e.g. over WebSocket)
     emit_event: Optional[Callable[[str, Dict[str, Any]], None]] = None

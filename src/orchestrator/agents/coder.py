@@ -106,14 +106,24 @@ class CoderAgent(BaseAgent):
                                           project_name=context.project_name,
                                           project_type=context.project_type,
                                           requirements=context.requirements)
+        plan_block = self._plan_block(context)
         user_prompt = (
             f"Project Name: {context.project_name}\n"
             f"Project Type: {context.project_type}\n"
             f"Requirements: {context.requirements}\n"
+            f"{plan_block}"
             "Create a complete project with proper package structure, "
             "interconnected modules, tests, and configuration files."
+            " Respect the approved planning artifacts (especially the folder structure) "
+            "exactly — do not rename or reorganise the planned directories."
+            " Every source file you generate MUST end in `.py`."
         )
         context.source_code = self._llm_code_request(system_prompt, user_prompt)
+        # Enforce the Python-only restriction first so downstream logic
+        # never sees HTML/CSS/JS/TS artefacts.
+        self._enforce_python_only(context)
+        # Then enforce the planned folder structure.
+        self._enforce_planned_folder_structure(context)
         context.current_step = "PROJECT_GENERATED"
         context.success = True
         return context
@@ -182,8 +192,17 @@ class CoderAgent(BaseAgent):
 
     def _generate_code(self, context: WorkflowContext) -> WorkflowContext:
         system_prompt = self._load_prompt("coder_generate.txt")
-        user_prompt = f"Requirements: {context.requirements}"
+        plan_block = self._plan_block(context)
+        user_prompt = (
+            f"Requirements: {context.requirements}\n"
+            f"{plan_block}"
+            "Follow the approved planning artifacts (especially the folder structure) "
+            "exactly — do not rename or reorganise the planned directories."
+            " Every source file you generate MUST end in `.py`."
+        )
         context.source_code = self._llm_code_request(system_prompt, user_prompt)
+        self._enforce_python_only(context)
+        self._enforce_planned_folder_structure(context)
         context.current_step = "CODE_GENERATED"
         context.success = True
         return context
@@ -274,6 +293,182 @@ class CoderAgent(BaseAgent):
             loc = f" at {item.location}" if item.location else ""
             lines.append(f"{idx}. [{item.severity.upper()}]{loc}: {item.description}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _plan_block(context: WorkflowContext) -> str:
+        """Render the approved plan as a prompt section the LLM can follow.
+
+        When the plan includes a ``folder_structure`` module, that section is
+        emitted as a strict implementation contract: the Coder Agent MUST use
+        those exact paths (no renaming, no reorganisation, no flattening).
+        Source files are pulled from ``file_responsibilities`` so each planned
+        file appears explicitly in the prompt.
+        """
+        plan = context.plan
+        if not plan or not context.plan_approved:
+            return ""
+        lines = ["\n# APPROVED IMPLEMENTATION PLAN\n"]
+        if plan.requirements:
+            lines.append(f"Original Requirements: {plan.requirements}\n")
+
+        # ── Folder structure contract (highest priority) ────────────
+        fs = getattr(plan, "folder_structure", None)
+        has_planned_tree = bool(fs and getattr(fs, "tree", None))
+
+        import dataclasses as _dc
+        for mod in plan.selected_module_ids():
+            mod_label = mod.replace("_", " ").title()
+            data = getattr(plan, mod, None)
+            if data is None:
+                continue
+            if mod == "folder_structure" and has_planned_tree:
+                lines.append("\n## Folder Structure (STRICT CONTRACT — DO NOT DEVIATE)")
+                lines.append("The Coder Agent MUST generate files using EXACTLY these paths.")
+                lines.append("Do NOT rename, reorganise, flatten, or relocate any of them.")
+                lines.append("Do NOT add extra top-level directories that are not listed here.")
+                lines.append("If the structure shows a sub-package, that sub-package MUST exist as its own directory.\n")
+                lines.append("```")
+                lines.append(fs.tree.rstrip())
+                lines.append("```")
+                if getattr(fs, "notes", None):
+                    lines.append(f"\nConventions: {fs.notes}")
+                # Enumerated source-file paths so the LLM has zero ambiguity.
+                from .planning_models import FolderStructure as _FS, is_test_path as _itp
+                source_paths = [
+                    p for p in _FS(tree=fs.tree).parsed_paths()
+                    if not _itp(p)
+                ]
+                if source_paths:
+                    lines.append("\n**Files you MUST create** (with full paths):")
+                    for p in source_paths:
+                        lines.append(f"  • `{p}`")
+                # Also enumerate the test dir so the Coder leaves it alone.
+                test_root = _FS(tree=fs.tree).test_root()
+                if test_root and test_root not in source_paths:
+                    lines.append(f"\n**Tests directory (DO NOT create — Tester Agent owns):** `{test_root}/`")
+                continue
+            if mod == "file_responsibilities" and _dc.is_dataclass(data):
+                resp_map = getattr(data, "responsibilities", None)
+                if isinstance(resp_map, dict) and resp_map:
+                    lines.append("\n## Planned File Responsibilities")
+                    lines.append("These files MUST exist with exactly these responsibilities:")
+                    for fname, purpose in resp_map.items():
+                        lines.append(f"  • `{fname}` — {purpose}")
+                continue
+            lines.append(f"\n## {mod_label}")
+            try:
+                if _dc.is_dataclass(data):
+                    lines.append(_dc.asdict(data).__repr__())
+                else:
+                    lines.append(str(data))
+            except Exception:
+                lines.append(str(data))
+
+        if has_planned_tree:
+            lines.append(
+                "\n# REMINDER\n"
+                "If a `Folder Structure` was provided above, the Coder Agent "
+                "MUST use exactly those file paths. The Tester Agent will "
+                "place tests in the planned `tests/` directory using the "
+                "same convention. Do NOT create your own `tests/` directory."
+            )
+
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _enforce_python_only(context: WorkflowContext) -> None:
+        """Strip every non-``.py`` file the LLM tried to add to ``source_code``.
+
+        The user-facing constraint is "Python only" — HTML / CSS / JS /
+        TS / SQL / shell / YAML source files are FORBIDDEN in this app
+        stack. This is a defensive safety net that runs *before*
+        ``_enforce_planned_folder_structure`` so the downstream logic
+        never sees forbidden artefacts.
+        """
+        from .planning_models import is_forbidden_non_python_source
+        dropped: List[str] = []
+        for path in list(context.source_code.keys()):
+            if path.endswith(".py"):
+                continue
+            if path.endswith("/"):
+                continue
+            # Configuration / packaging files at the project root are fine.
+            base = path.split("/")[-1].lower()
+            if base in {"pyproject.toml", "requirements.txt", "requirements-dev.txt",
+                        "readme.md", "license", ".gitignore", ".dockerignore",
+                        "dockerfile", "docker-compose.yml", "pytest.ini",
+                        "setup.py", "setup.cfg", "pyrightconfig.json",
+                        "mypy.ini", "manifest.in"}:
+                continue
+            if is_forbidden_non_python_source(path):
+                context.source_code.pop(path, None)
+                dropped.append(path)
+
+        if dropped:
+            logger.warning(
+                "Coder: dropped %d non-Python file(s) per Python-only policy: %s",
+                len(dropped), ", ".join(dropped[:10]),
+            )
+
+    @staticmethod
+    def _enforce_planned_folder_structure(context: WorkflowContext) -> None:
+        """Validate that LLM-generated file paths match the planned tree.
+
+        If the approved plan contains a ``folder_structure`` module, every
+        generated file SHOULD live at one of the planned paths. Files the
+        LLM placed one directory off (e.g. ``src/__init__.py`` when the
+        plan says ``src/<pkg>/__init__.py``) are remapped to the planned
+        location. Missing planned files are flagged so the user (and the
+        Tester Agent) know what still needs to be created.
+        """
+        plan = context.plan
+        if not plan or not context.plan_approved:
+            return
+
+        from .planning_models import (
+            FolderStructure as _FS,
+            is_test_path as _itp,
+        )
+        fs = getattr(plan, "folder_structure", None)
+        if not fs or not getattr(fs, "tree", None):
+            # No folder structure in the plan — Coder is free to design its
+            # own layout. Nothing to enforce.
+            return
+
+        planned = _FS(tree=fs.tree)
+        planned_source_paths = [
+            p for p in planned.planned_source_files()
+            if not p.endswith("/")  # strip directory entries
+        ]
+        if not planned_source_paths:
+            return
+
+        # ── 1. Remap LLM paths that drift outside the planned tree ───
+        remapped: List[tuple] = []
+        for path in list(context.source_code.keys()):
+            if path in planned_source_paths:
+                continue
+            if _itp(path):
+                continue  # tests aren't owned by Coder
+            target = _find_nearest_planned_path(path, planned_source_paths)
+            if target and target != path and target not in context.source_code:
+                content = context.source_code.pop(path)
+                context.source_code[target] = content
+                remapped.append((path, target))
+
+        for src_path, tgt_path in remapped:
+            logger.info(
+                "Coder: remapped '%s' → '%s' to honour planned folder structure",
+                src_path, tgt_path,
+            )
+
+        # ── 2. Flag missing planned files ────────────────────────────
+        missing = [p for p in planned_source_paths if p not in context.source_code]
+        if missing:
+            logger.warning(
+                "Coder: %d planned file(s) missing from generated source: %s",
+                len(missing), ", ".join(missing[:10]),
+            )
 
     @staticmethod
     def _files_needing_fix(context: WorkflowContext, items: List[FeedbackItem]) -> set:
@@ -442,3 +637,29 @@ class CoderAgent(BaseAgent):
         if not parsed:
             raise LLMResponseParseError("Model response contained no valid files.")
         return parsed
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Module-level helper used by CoderAgent._enforce_planned_folder_structure
+# ─────────────────────────────────────────────────────────────────────
+
+def _find_nearest_planned_path(generated: str, planned_paths: List[str]) -> Optional[str]:
+    """Return the planned path that best matches ``generated``.
+
+    Used to remap LLM paths that drift one directory away from the planned
+    structure (e.g. ``src/__init__.py`` → ``src/<pkg>/__init__.py``).
+    """
+    from pathlib import Path as _P
+    gen_name = _P(generated).name
+    if not gen_name:
+        return None
+    matches = [p for p in planned_paths if _P(p).name == gen_name]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        gen_parts = generated.split("/")
+        best = max(matches, key=lambda p: sum(
+            1 for a, b in zip(p.split("/"), gen_parts) if a == b
+        ))
+        return best
+    return None

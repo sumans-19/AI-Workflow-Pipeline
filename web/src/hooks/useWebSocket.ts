@@ -17,6 +17,25 @@ import type {
 const WS_BASE = import.meta.env.VITE_WS_URL || "ws://localhost:8000";
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+// Map backend agent identifiers to the canonical PipelineStage enum.
+// The sidebar timeline only renders the 5 known stages, so anything
+// that doesn't match must be normalised before it reaches the store.
+function mapAgentToStage(agent: string): import("../types").PipelineStage {
+  switch ((agent || "").toLowerCase()) {
+    case "planner":      return "PLANNING"
+    case "coder":        return "CODING"
+    case "tester":       return "TESTING"
+    case "reviewer":     return "REVIEWING"
+    case "validator":    return "VALIDATING"
+    case "planning":     return "PLANNING"
+    case "coding":       return "CODING"
+    case "testing":      return "TESTING"
+    case "reviewing":    return "REVIEWING"
+    case "validating":   return "VALIDATING"
+    default:             return "PLANNING"
+  }
+}
+
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const sessionId = useSessionStore((s) => s.sessionId);
@@ -68,7 +87,7 @@ export function useWebSocket() {
 
       case "agent_started": {
         const d = data as any;
-        const stageName = d.agent === "tester" ? "TESTING" : d.agent.toUpperCase();
+        const stageName = mapAgentToStage(d.agent);
         store.addTimelineStep({
           stage: stageName,
           status: "in_progress",
@@ -80,7 +99,7 @@ export function useWebSocket() {
 
       case "agent_progress": {
         const d = data as any;
-        const stageName = d.agent === "tester" ? "TESTING" : d.agent.toUpperCase();
+        const stageName = mapAgentToStage(d.agent);
         store.updateTimelineStep(stageName, {
           status: "in_progress",
           message: d.message || `${d.progress}% complete`,
@@ -90,7 +109,7 @@ export function useWebSocket() {
 
       case "agent_completed": {
         const d = data as any;
-        const stageName = d.agent === "tester" ? "TESTING" : d.agent.toUpperCase();
+        const stageName = mapAgentToStage(d.agent);
         store.updateTimelineStep(stageName, {
           status: d.failed ? "error" : "complete",
           message: d.message || `${d.agent} completed`,
@@ -106,7 +125,7 @@ export function useWebSocket() {
 
       case "agent_failed": {
         const d = data as any;
-        const stageName = d.agent === "tester" ? "TESTING" : d.agent.toUpperCase();
+        const stageName = mapAgentToStage(d.agent);
         store.updateTimelineStep(stageName, {
           status: "error",
           message: d.reason || `${d.agent} failed`,
@@ -151,8 +170,20 @@ export function useWebSocket() {
 
       case "checkpoint": {
         const d = data as CheckpointData;
-        store.setCheckpoint(d);
-        store.setStatus("checkpoint");
+        // Planning review gets routed to PlanningReview component, not the
+        // generic ReviewPanel. We still populate activeCheckpoint so the UI
+        // knows a checkpoint is active.
+        if (d.checkpoint_type === "PLANNING_REVIEW") {
+          const planData = (d.data as any) || {}
+          store.setPlanningDocument(planData.plan ?? null, planData.modules_generated ?? [])
+          store.setCheckpoint(d)
+          store.setStatus("checkpoint")
+          store.setPlanningMode("review")
+        } else {
+          store.setCheckpoint(d)
+          store.setStatus("checkpoint")
+          store.setPlanningMode("idle")
+        }
         break;
       }
 
@@ -177,6 +208,7 @@ export function useWebSocket() {
         const d = data as PipelineCompleteData;
         store.setStatus(d.status === "success" ? "complete" : "error");
         store.setCheckpoint(null);
+        store.setPlanningMode("idle");
         store.addMessage({
           id: crypto.randomUUID(),
           role: "assistant",

@@ -12,14 +12,14 @@ export function useSession() {
   const reset = useSessionStore((s) => s.reset);
 
   const createSession = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, projectTitle?: string) => {
       const store = useSessionStore.getState();
       reset();
 
       addMessage({
         id: crypto.randomUUID(),
         role: "user",
-        content: prompt,
+        content: projectTitle ? `**${projectTitle}**\n\n${prompt}` : prompt,
         timestamp: Date.now(),
       });
 
@@ -27,10 +27,14 @@ export function useSession() {
         const res = await fetch(`${API_BASE}/api/sessions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            prompt, 
+          body: JSON.stringify({
+            prompt,
             mode: "GENERATE",
-            test_execution_mode: store.testExecutionMode
+            project_name: projectTitle || "",
+            project_type: "library",
+            is_project_mode: true,
+            test_execution_mode: store.testExecutionMode,
+            planning_modules: store.planningConfig.modules,
           }),
         });
         const data = await res.json();
@@ -61,11 +65,11 @@ export function useSession() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action, feedback }),
         });
-        
+
         if (!res.ok) {
           throw new Error(`Server returned ${res.status}`);
         }
-        
+
         // Optimistically update the UI to show the pipeline is running again
         store.setCheckpoint(null);
         store.setStatus("running");
